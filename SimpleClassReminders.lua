@@ -10,6 +10,19 @@ local HEALTHSTONE_ITEM_IDS = {
 local FORTITUDE_SPELL_ID = 21562 -- Palabra de poder: Entereza
 local DEVOTION_AURA_SPELL_ID = 465 -- Aura de devocion
 
+local LETHAL_POISONS = {
+    [2823]   = true, -- Deadly Poison
+    [8679]   = true, -- Wound Poison
+    [315584] = true, -- Instant Poison
+}
+
+local NON_LETHAL_POISONS = {
+    [3408]   = true, -- Crippling Poison
+    [5761]   = true, -- Numbing Poison
+    [381637] = true, -- Atrophic Poison
+}
+
+
 -- =========================
 -- Funciones Utilitarias
 -- =========================
@@ -129,6 +142,29 @@ local function GroupAllHaveFortitude()
     return true
 end
 
+local function PlayerHasPoison(poisonSpellIDs)
+    local i = 1
+    while true do
+        local aura = C_UnitAuras.GetAuraDataByIndex("player", i, "HELPFUL")
+        if not aura then break end
+
+        if aura.spellId and poisonSpellIDs[aura.spellId] then
+            return true
+        end
+        i = i + 1
+    end
+    return false
+end
+
+
+local function PlayerHasLethalPoison()
+    return PlayerHasPoison(LETHAL_POISONS)
+end
+
+local function PlayerHasNonLethalPoison()
+    return PlayerHasPoison(NON_LETHAL_POISONS)
+end
+
 
 -- ==================================================
 -- Anchor
@@ -179,6 +215,20 @@ petText:SetText(L.NO_PET)
 StyleText(petText)
 petText:Hide()
 
+-- Rogue - veneno letal
+local lethalPoisonText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+lethalPoisonText:SetPoint("TOP", anchor, "TOP", 0, -60)
+lethalPoisonText:SetText(L.NO_LETHAL_POISON)
+StyleText(lethalPoisonText)
+lethalPoisonText:Hide()
+
+-- Rogue - veneno no letal
+local nonLethalPoisonText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+nonLethalPoisonText:SetPoint("TOP", anchor, "TOP", 0, -120)
+nonLethalPoisonText:SetText(L.NO_NON_LETHAL_POISON)
+StyleText(nonLethalPoisonText)
+nonLethalPoisonText:Hide()
+
 -- =========================
 -- Logica de alertas
 -- =========================
@@ -188,6 +238,9 @@ local function UpdateAlerts()
 	    stoneText:Hide()
 	    petText:Hide()
 	    fortitudeText:Hide()
+		devotionText:Hide()
+		lethalPoisonText:Hide()
+		nonLethalPoisonText:Hide()
 	    return
 	end
 
@@ -202,6 +255,16 @@ local function UpdateAlerts()
 
 	-- Aura de devocion
 	devotionText:SetShown(PlayerIs("PALADIN") and not UnitHasAuraBySpellId("player", DEVOTION_AURA_SPELL_ID))
+	
+	-- Venenos de rogue
+	if PlayerIs("ROGUE") then
+	    lethalPoisonText:SetShown(not PlayerHasLethalPoison())
+	    nonLethalPoisonText:SetShown(not PlayerHasNonLethalPoison())
+	else
+	    lethalPoisonText:Hide()
+	    nonLethalPoisonText:Hide()
+	end
+	
 end
 
 -- =========================
@@ -216,8 +279,13 @@ f:RegisterEvent("UNIT_AURA")
 f:RegisterEvent("UNIT_PET")
 f:RegisterEvent("PLAYER_REGEN_DISABLED")
 f:RegisterEvent("PLAYER_REGEN_ENABLED")
+f:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
+f:RegisterEvent("UNIT_INVENTORY_CHANGED")
+f:RegisterEvent("PLAYER_ENTERING_WORLD")
 
-f:SetScript("OnEvent", function()
+
+f:SetScript("OnEvent", function(_, event, unit)
+    if unit and unit ~= "player" then return end
     UpdateAlerts()
 end)
 

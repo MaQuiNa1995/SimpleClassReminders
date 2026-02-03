@@ -1,8 +1,8 @@
-## Interface: 11508, 20505, 38000, 50500, 50503, 110207, 120000, 120001
+## Interface: 110207, 120000, 120001
 ## Title: SimpleClassReminders
 ## Notes: Simple class reminders to track buffs, pets etc
 ## Author: MaQuina1995
-## Version: 1.0.0
+## Version: 1.1.0
 
 Locales\enUS.lua
 Locales\esES.lua
