@@ -8,6 +8,11 @@ local HEALTHSTONE_ITEM_IDS = {
     5512,   -- Normal
 }
 local FORTITUDE_SPELL_ID = 21562 -- Palabra de poder: Entereza
+local WILD_MARK_SPELL_ID = 1126 -- Marca de lo salvaje
+local BRONZE_BLESSING_ID = 381748 -- Bendicion de bronce
+local ARCANE_INTELLECT_SPELL_ID = 1459 -- Intelecto Arcano
+local SKYFURY_SPELL_ID = 462854 -- Furia del cielo
+
 local DEVOTION_AURA_SPELL_ID = 465 -- Aura de devocion
 
 local LETHAL_POISONS = {
@@ -80,7 +85,7 @@ local function PlayerHasPet()
 end
 
 local function CanShow()
-    return not UnitIsDeadOrGhost("player") and not UnitHasVehicleUI("player")
+    return not UnitIsDeadOrGhost("player") and not UnitHasVehicleUI("player") and not IsMounted()
 end
 
 -- =========================
@@ -93,7 +98,7 @@ local function UnitHasAuraBySpellId(unit, spellID)
         AuraUtil.ForEachAura(unit, "HELPFUL", nil, function(aura)
             if aura and aura.spellId == spellID then
                 found = true
-                return true -- corta
+                return found
             end
         end)
         if found then return true end
@@ -114,13 +119,13 @@ local function UnitHasAuraBySpellId(unit, spellID)
     return false
 end
 
-local function GroupAllHaveFortitude()
-
-    if not UnitHasAuraBySpellId("player", FORTITUDE_SPELL_ID) then
+local function GroupAllHaveBlessing(spellID)
+	
+    if not UnitHasAuraBySpellId("player", spellID) then
         return false
     end
 
- 	local prefix, count
+    local prefix, count
     if IsInRaid() then
         prefix, count = "raid", GetNumGroupMembers()
     elseif IsInGroup() then
@@ -132,7 +137,7 @@ local function GroupAllHaveFortitude()
             local unit = prefix .. i
             if UnitExists(unit)
                and not UnitIsDeadOrGhost(unit)
-               and not UnitHasAuraBySpellId(unit, FORTITUDE_SPELL_ID)
+               and not UnitHasAuraBySpellId(unit, spellID)
             then
                 return false
             end
@@ -165,6 +170,16 @@ local function PlayerHasNonLethalPoison()
     return PlayerHasPoison(NON_LETHAL_POISONS)
 end
 
+local function DKHasWeaponRune()
+    local itemLink = GetInventoryItemLink("player", 16)
+    if not itemLink then return false end
+
+    -- El formato del link es: item:ITEMID:ENCHANTID:...
+    local enchantID = itemLink:match("item:%d+:(%d+):")
+
+    -- enchantID distinto de 0 => hay runa
+    return enchantID and tonumber(enchantID) ~= 0
+end
 
 -- ==================================================
 -- Anchor
@@ -201,6 +216,34 @@ fortitudeText:SetText(L.NO_FORTITUDE)
 StyleText(fortitudeText)
 fortitudeText:Hide()
 
+-- Druida
+local wildMarkText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+wildMarkText:SetPoint("TOP", anchor, "TOP", 0, -60)
+wildMarkText:SetText(L.NO_MARK_OF_THE_WILD)
+StyleText(wildMarkText)
+wildMarkText:Hide()
+
+-- Evoker
+local bronzeBlessingText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+bronzeBlessingText:SetPoint("TOP", anchor, "TOP", 0, -60)
+bronzeBlessingText:SetText(L.NO_BRONZE_BLESSING)
+StyleText(bronzeBlessingText)
+bronzeBlessingText:Hide()
+
+-- Mago
+local arcaneIntellectText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+arcaneIntellectText:SetPoint("TOP", anchor, "TOP", 0, -60)
+arcaneIntellectText:SetText(L.NO_ARCANE_INTELLECT)
+StyleText(arcaneIntellectText)
+arcaneIntellectText:Hide()
+
+-- Chaman
+local skyfuryText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+skyfuryText:SetPoint("TOP", anchor, "TOP", 0, -60)
+skyfuryText:SetText(L.NO_SKYFURY)
+StyleText(skyfuryText)
+skyfuryText:Hide()
+
 -- Paladin
 local devotionText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 devotionText:SetPoint("TOP", anchor, "TOP", 0, -60)
@@ -229,18 +272,30 @@ nonLethalPoisonText:SetText(L.NO_NON_LETHAL_POISON)
 StyleText(nonLethalPoisonText)
 nonLethalPoisonText:Hide()
 
+-- DK - runa de arma
+local dkRuneText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+dkRuneText:SetPoint("TOP", anchor, "TOP", 0, -60)
+dkRuneText:SetText(L.NO_DK_RUNE)
+StyleText(dkRuneText)
+dkRuneText:Hide()
+
 -- =========================
 -- Logica de alertas
 -- =========================
 
 local function UpdateAlerts()
 	if not CanShow() then
+		dkRuneText:Hide()
 	    stoneText:Hide()
 	    petText:Hide()
 	    fortitudeText:Hide()
+		wildMarkText:Hide()
+		bronzeBlessingText:Hide()
 		devotionText:Hide()
 		lethalPoisonText:Hide()
 		nonLethalPoisonText:Hide()
+		arcaneIntellectText:Hide()
+		skyfuryText:Hide()
 	    return
 	end
 
@@ -250,11 +305,23 @@ local function UpdateAlerts()
 	-- Mascota
 	petText:SetShown(PlayerShouldHavePet() and not PlayerHasPet())
 
-	-- Palabra de Poder Entereza
-	fortitudeText:SetShown(PlayerIs("PRIEST") and not GroupAllHaveFortitude())
+	-- Palabra de Poder: Entereza
+	fortitudeText:SetShown(PlayerIs("PRIEST") and not GroupAllHaveBlessing(FORTITUDE_SPELL_ID))
+
+	-- Marca de lo Salvaje
+	wildMarkText:SetShown(PlayerIs("DRUID") and not GroupAllHaveBlessing(WILD_MARK_SPELL_ID))
+
+	-- Bendición de Bronce
+	bronzeBlessingText:SetShown(PlayerIs("EVOKER") and not GroupAllHaveBlessing(BRONZE_BLESSING_ID))
+	
+	-- Intelecto Arcano
+	arcaneIntellectText:SetShown(PlayerIs("MAGE") and not GroupAllHaveBlessing(ARCANE_INTELLECT_SPELL_ID))
 
 	-- Aura de devocion
 	devotionText:SetShown(PlayerIs("PALADIN") and not UnitHasAuraBySpellId("player", DEVOTION_AURA_SPELL_ID))
+	
+	-- Furia del cielo
+	skyfuryText:SetShown(PlayerIs("SHAMAN") and not GroupAllHaveBlessing(SKYFURY_SPELL_ID))
 	
 	-- Venenos de rogue
 	if PlayerIs("ROGUE") then
@@ -265,6 +332,8 @@ local function UpdateAlerts()
 	    nonLethalPoisonText:Hide()
 	end
 	
+	-- Runa de arma DK
+	dkRuneText:SetShown(PlayerIs("DEATHKNIGHT") and not DKHasWeaponRune())
 end
 
 -- =========================
@@ -282,7 +351,7 @@ f:RegisterEvent("PLAYER_REGEN_ENABLED")
 f:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 f:RegisterEvent("UNIT_INVENTORY_CHANGED")
 f:RegisterEvent("PLAYER_ENTERING_WORLD")
-
+f:RegisterEvent("UNIT_FLAGS")
 
 f:SetScript("OnEvent", function(_, event, unit)
     if unit and unit ~= "player" then return end

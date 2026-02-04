@@ -4,6 +4,5 @@
 ## Author: MaQuina1995
 ## Version: 1.1.0
 
-Locales\enUS.lua
-Locales\esES.lua
+Locales\Locales.lua
 SimpleClassReminders.lua
