@@ -81,5 +81,6 @@ In the coming days and weeks, additional features are planned, including:
 
 ## 📦 Download
 
-[![Download on CurseForge](https://img.shields.io/badge/Download-CurseForge-orange?style=for-the-badge&logo=curseforge)](https://www.curseforge.com/wow/addons/simple-class-reminders)
+[![CurseForge Downloads](https://img.shields.io/curseforge/dt/1451711?style=for-the-badge&logo=curseforge)](https://www.curseforge.com/wow/addons/simple-class-reminders)
+
 
