@@ -15,6 +15,12 @@ local SKYFURY_SPELL_ID = 462854 -- Furia del cielo
 
 local DEVOTION_AURA_SPELL_ID = 465 -- Aura de devocion
 
+local TALENT_SUMMON_ELEMENTAL_LEARNED = false
+local TALENT_SUMMON_ELEMENTAL_SPELL_ID = 31687 -- Invocar elemental
+
+local SPEC_DK_UNHOLY = 252 -- Spec de profano
+
+
 local LETHAL_POISONS = {
     [2823]   = true, -- Deadly Poison
     [8679]   = true, -- Wound Poison
@@ -26,7 +32,6 @@ local NON_LETHAL_POISONS = {
     [5761]   = true, -- Numbing Poison
     [381637] = true, -- Atrophic Poison
 }
-
 
 -- =========================
 -- Funciones Utilitarias
@@ -77,8 +82,25 @@ local function GroupHasWarlock()
 end
 
 local function PlayerShouldHavePet()
-    return PlayerIs("WARLOCK") or PlayerIs("HUNTER")
+    if PlayerIs("WARLOCK") or PlayerIs("HUNTER") then
+        return true
+    end
+
+    if PlayerIs("MAGE") then
+        return TALENT_SUMMON_ELEMENTAL_LEARNED
+    end
+
+    if PlayerIs("DEATHKNIGHT") then
+        local specIndex = GetSpecialization()
+        if not specIndex then return false end
+
+        local specID = GetSpecializationInfo(specIndex)
+        return specID == SPEC_DK_UNHOLY
+    end
+
+    return false
 end
+
 
 local function PlayerHasPet()
     return UnitExists("pet")
@@ -177,7 +199,6 @@ local function DKHasWeaponRune()
     -- El formato del link es: item:ITEMID:ENCHANTID:...
     local enchantID = itemLink:match("item:%d+:(%d+):")
 
-    -- enchantID distinto de 0 => hay runa
     return enchantID and tonumber(enchantID) ~= 0
 end
 
@@ -336,6 +357,31 @@ local function UpdateAlerts()
 	dkRuneText:SetShown(PlayerIs("DEATHKNIGHT") and not DKHasWeaponRune())
 end
 
+local function UpdateTalentSummonElemental()
+    TALENT_SUMMON_ELEMENTAL_LEARNED = false
+
+    local configID = C_ClassTalents.GetActiveConfigID()
+    if not configID then return end
+
+    local configInfo = C_Traits.GetConfigInfo(configID)
+    for _, treeID in ipairs(configInfo.treeIDs) do
+        local nodes = C_Traits.GetTreeNodes(treeID)
+        for _, nodeID in ipairs(nodes) do
+            local nodeInfo = C_Traits.GetNodeInfo(configID, nodeID)
+            if nodeInfo and nodeInfo.activeEntry then
+                local entryInfo = C_Traits.GetEntryInfo(configID, nodeInfo.activeEntry.entryID)
+                if entryInfo and entryInfo.definitionID then
+                    local defInfo = C_Traits.GetDefinitionInfo(entryInfo.definitionID)
+                    if defInfo and defInfo.spellID == TALENT_SUMMON_ELEMENTAL_SPELL_ID then
+                        TALENT_SUMMON_ELEMENTAL_LEARNED = true
+                        return
+                    end
+                end
+            end
+        end
+    end
+end
+
 -- =========================
 -- Registro de Eventos
 -- =========================
@@ -352,8 +398,20 @@ f:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 f:RegisterEvent("UNIT_INVENTORY_CHANGED")
 f:RegisterEvent("PLAYER_ENTERING_WORLD")
 f:RegisterEvent("UNIT_FLAGS")
+f:RegisterEvent("TRAIT_CONFIG_UPDATED")
+f:RegisterEvent("TRAIT_TREE_CHANGED")
+f:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 
 f:SetScript("OnEvent", function(_, event, unit)
+	
+	if event == "TRAIT_CONFIG_UPDATED"
+		or event == "TRAIT_TREE_CHANGED"
+		or event == "PLAYER_SPECIALIZATION_CHANGED"
+		or event == "PLAYER_ENTERING_WORLD"
+	then
+		UpdateTalentSummonElemental()
+	end
+	
     if unit and unit ~= "player" then return end
     UpdateAlerts()
 end)
