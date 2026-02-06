@@ -183,6 +183,38 @@ local function PlayerHasPoison(poisonSpellIDs)
     return false
 end
 
+local function ShamanHasWeaponEnchants()
+    local hasMH, _, _, hasOH = GetWeaponEnchantInfo()
+
+    if not hasMH and not hasOH then
+        return false
+    end
+
+    -- Main hand
+    local mainHandLink = GetInventoryItemLink("player", 16)
+    if not mainHandLink then return false end
+
+    -- Off hand
+    local offHandLink = GetInventoryItemLink("player", 17)
+
+    -- Baston
+    if not offHandLink then
+        return true
+    end
+
+    local _, _, _, _, _, _, _, _, offhandEquipLoc = GetItemInfo(offHandLink)
+
+    -- Escudo
+    if offhandEquipLoc == "INVTYPE_SHIELD" then
+        return true
+    end
+
+    -- 2 armas principales (Mejora)
+    return true
+end
+
+
+
 
 local function PlayerHasLethalPoison()
     return PlayerHasPoison(LETHAL_POISONS)
@@ -265,6 +297,12 @@ skyfuryText:SetText(L.NO_SKYFURY)
 StyleText(skyfuryText)
 skyfuryText:Hide()
 
+local shamanWeaponText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+shamanWeaponText:SetPoint("TOP", anchor, "TOP", 0, -120)
+shamanWeaponText:SetText(L.NO_SHAMAN_WEAPON_ENCHANT)
+StyleText(shamanWeaponText)
+shamanWeaponText:Hide()
+
 -- Paladin
 local devotionText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 devotionText:SetPoint("TOP", anchor, "TOP", 0, -60)
@@ -343,6 +381,14 @@ local function UpdateAlerts()
 	
 	-- Furia del cielo
 	skyfuryText:SetShown(PlayerIs("SHAMAN") and not GroupAllHaveBlessing(SKYFURY_SPELL_ID))
+	
+	-- Encantamientos de arma (Chaman)
+	if PlayerIs("SHAMAN") then
+	    shamanWeaponText:SetShown(not ShamanHasWeaponEnchants())
+	else
+	    shamanWeaponText:Hide()
+	end
+
 	
 	-- Venenos de rogue
 	if PlayerIs("ROGUE") then
