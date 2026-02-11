@@ -343,6 +343,10 @@ dkRuneText:Hide()
 -- =========================
 
 local function UpdateAlerts()
+	
+	-- No funciona en combate por la purga de addons de blizzard
+	if InCombatLockdown() then return end
+
 	if not CanShow() then
 		dkRuneText:Hide()
 	    stoneText:Hide()
