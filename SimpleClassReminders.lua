@@ -7,8 +7,6 @@ local L = addon.L
 -- ==================================================
 local _, PLAYER_CLASS = UnitClass("player")
 
-local IN_COMBAT = false
-
 local HEALTHSTONE_ITEM_IDS = {
     224464, -- Con talento de warlock
     5512,   -- Normal
@@ -458,7 +456,6 @@ f:RegisterEvent("BAG_UPDATE_DELAYED")
 f:RegisterEvent("GROUP_ROSTER_UPDATE")
 f:RegisterEvent("UNIT_AURA")
 f:RegisterEvent("UNIT_PET")
-f:RegisterEvent("PLAYER_REGEN_DISABLED")
 f:RegisterEvent("PLAYER_REGEN_ENABLED")
 f:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 f:RegisterEvent("UNIT_INVENTORY_CHANGED")
@@ -470,21 +467,15 @@ f:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 
 f:SetScript("OnEvent", function(_, event, unit, _, spellID)
 
-    -- Entrar en combate
-    if event == "PLAYER_REGEN_DISABLED" then
-        IN_COMBAT = true
-        HideAllTexts()
-        return
-    elseif event == "PLAYER_REGEN_ENABLED" then
-        IN_COMBAT = false
-        RequestUpdate()
-        return
-    end
-
-    -- Si estamos en combate, no hacer absolutamente nada
-    if IN_COMBAT then
-        return
-    end
+	if event == "PLAYER_REGEN_ENABLED" then
+	    RequestUpdate()
+	    return
+	end
+	
+	if InCombatLockdown() then
+	    HideAllTexts()
+	    return
+	end
 
     -- Actualizar flags de grupo
     if event == "PLAYER_ENTERING_WORLD" or event == "GROUP_ROSTER_UPDATE" then
@@ -500,13 +491,26 @@ f:SetScript("OnEvent", function(_, event, unit, _, spellID)
         UpdateTalentSummonElemental()
     end
 
-    -- Rogue: aplicar venenos
-    if event == "UNIT_SPELLCAST_SUCCEEDED" and unit == "player" and PLAYER_CLASS == "ROGUE" then
-        if LETHAL_POISONS[spellID] or NON_LETHAL_POISONS[spellID] then
-            RequestUpdate()
-            return
-        end
-    end
+	-- Rogue: aplicar venenos manualmente
+	if event == "UNIT_SPELLCAST_SUCCEEDED"
+	    and unit == "player"
+	    and PLAYER_CLASS == "ROGUE"
+	    and (LETHAL_POISONS[spellID] or NON_LETHAL_POISONS[spellID])
+	then
+	    RequestUpdate()
+	    return
+	end
+
+	-- Rogue: cambio de arma / inventory
+	if (event == "UNIT_INVENTORY_CHANGED" and unit == "player")
+	   or event == "PLAYER_EQUIPMENT_CHANGED"
+	then
+	    if PLAYER_CLASS == "ROGUE" then
+	        RequestUpdate()
+	        return
+	    end
+	end
+
 
     -- Filtrar UNIT_AURA
     if event == "UNIT_AURA" and unit ~= "player" then
