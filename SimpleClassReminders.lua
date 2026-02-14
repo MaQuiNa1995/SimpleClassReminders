@@ -2,24 +2,29 @@ local addonName, addon = ...
 addon.L = addon.L or {}
 local L = addon.L
 
--- Constantes
+-- ==================================================
+-- Cache / Constantes
+-- ==================================================
+local _, PLAYER_CLASS = UnitClass("player")
+
+local IN_COMBAT = false
+
 local HEALTHSTONE_ITEM_IDS = {
     224464, -- Con talento de warlock
     5512,   -- Normal
 }
-local FORTITUDE_SPELL_ID = 21562 -- Palabra de poder: Entereza
-local WILD_MARK_SPELL_ID = 1126 -- Marca de lo salvaje
-local BRONZE_BLESSING_ID = 381748 -- Bendicion de bronce
-local ARCANE_INTELLECT_SPELL_ID = 1459 -- Intelecto Arcano
-local SKYFURY_SPELL_ID = 462854 -- Furia del cielo
 
-local DEVOTION_AURA_SPELL_ID = 465 -- Aura de devocion
+local FORTITUDE_SPELL_ID            = 21562  -- Palabra de poder: Entereza
+local WILD_MARK_SPELL_ID            = 1126   -- Marca de lo salvaje
+local BRONZE_BLESSING_ID            = 381748 -- Bendición de bronce
+local ARCANE_INTELLECT_SPELL_ID     = 1459   -- Intelecto arcano
+local SKYFURY_SPELL_ID              = 462854 -- Furia del cielo
+local DEVOTION_AURA_SPELL_ID        = 465    -- Aura de devoción
 
-local TALENT_SUMMON_ELEMENTAL_LEARNED = false
-local TALENT_SUMMON_ELEMENTAL_SPELL_ID = 31687 -- Invocar elemental
+local TALENT_SUMMON_ELEMENTAL_LEARNED   = false
+local TALENT_SUMMON_ELEMENTAL_SPELL_ID  = 31687 -- Invocar elemental
 
 local SPEC_DK_UNHOLY = 252 -- Spec de profano
-
 
 local LETHAL_POISONS = {
     [2823]   = true, -- Deadly Poison
@@ -33,17 +38,41 @@ local NON_LETHAL_POISONS = {
     [381637] = true, -- Atrophic Poison
 }
 
--- =========================
--- Funciones Utilitarias
--- =========================
+-- ==================================================
+-- Cache de grupo (evita escanear roster en cada update)
+-- ==================================================
+local GROUP_HAS_WARLOCK = false
 
-local function PlayerClass()
-    local _, class = UnitClass("player")
-    return class
+local function UpdateGroupFlags()
+    GROUP_HAS_WARLOCK = false
+    if not IsInGroup() then return end
+
+    local prefix, count
+    if IsInRaid() then
+        prefix, count = "raid", GetNumGroupMembers()
+    else
+        prefix, count = "party", GetNumSubgroupMembers()
+    end
+
+    for i = 1, count do
+        local unit = prefix .. i
+        if UnitExists(unit) then
+            local _, class = UnitClass(unit)
+            if class == "WARLOCK" then
+                GROUP_HAS_WARLOCK = true
+                break
+            end
+        end
+    end
 end
 
-local function PlayerIs(class)
-    return PlayerClass() == class
+-- ==================================================
+-- Utilidades
+-- ==================================================
+local function CanShow()
+    return not UnitIsDeadOrGhost("player")
+        and not UnitHasVehicleUI("player")
+        and not IsMounted()
 end
 
 local function PlayerHasHealthstone()
@@ -56,44 +85,22 @@ local function PlayerHasHealthstone()
     return false
 end
 
-local function GroupHasWarlock()
-    if IsInRaid() then
-        for i = 1, GetNumGroupMembers() do
-            local unit = "raid" .. i
-            if UnitExists(unit) then
-                local _, class = UnitClass(unit)
-                if class == "WARLOCK" then
-                    return true
-                end
-            end
-        end
-    elseif IsInGroup() then
-        for i = 1, GetNumSubgroupMembers() do
-            local unit = "party" .. i
-            if UnitExists(unit) then
-                local _, class = UnitClass(unit)
-                if class == "WARLOCK" then
-                    return true
-                end
-            end
-        end
-    end
-    return false
+local function PlayerHasPet()
+    return UnitExists("pet")
 end
 
 local function PlayerShouldHavePet()
-    if PlayerIs("WARLOCK") or PlayerIs("HUNTER") then
+    if PLAYER_CLASS == "WARLOCK" or PLAYER_CLASS == "HUNTER" then
         return true
     end
 
-    if PlayerIs("MAGE") then
+    if PLAYER_CLASS == "MAGE" then
         return TALENT_SUMMON_ELEMENTAL_LEARNED
     end
 
-    if PlayerIs("DEATHKNIGHT") then
+    if PLAYER_CLASS == "DEATHKNIGHT" then
         local specIndex = GetSpecialization()
         if not specIndex then return false end
-
         local specID = GetSpecializationInfo(specIndex)
         return specID == SPEC_DK_UNHOLY
     end
@@ -101,40 +108,28 @@ local function PlayerShouldHavePet()
     return false
 end
 
-
-local function PlayerHasPet()
-    return UnitExists("pet")
-end
-
-local function CanShow()
-    return not UnitIsDeadOrGhost("player") and not UnitHasVehicleUI("player") and not IsMounted()
-end
-
--- =========================
--- Bufos
--- =========================
-
+-- ==================================================
+-- Auras / Bufos
+-- ==================================================
 local function UnitHasAuraBySpellId(unit, spellID)
-    if AuraUtil and AuraUtil.ForEachAura then
-        local found = false
-        AuraUtil.ForEachAura(unit, "HELPFUL", nil, function(aura)
-            if aura and aura.spellId == spellID then
-                found = true
-                return found
-            end
-        end)
-        if found then return true end
+    -- Vía rápida para player
+    if unit == "player" and C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
+        return C_UnitAuras.GetPlayerAuraBySpellID(spellID) ~= nil
     end
 
+    -- AuraUtil.FindAuraBySpellId (si existe)
+    if AuraUtil and AuraUtil.FindAuraBySpellId then
+        return AuraUtil.FindAuraBySpellId(spellID, unit, "HELPFUL") ~= nil
+    end
+
+    -- Fallback: iterar auras (último recurso)
     if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
-        local index = 1
+        local i = 1
         while true do
-            local aura = C_UnitAuras.GetAuraDataByIndex(unit, index, "HELPFUL")
+            local aura = C_UnitAuras.GetAuraDataByIndex(unit, i, "HELPFUL")
             if not aura then break end
-            if aura.spellId == spellID then
-                return true
-            end
-            index = index + 1
+            if aura.spellId == spellID then return true end
+            i = i + 1
         end
     end
 
@@ -142,27 +137,28 @@ local function UnitHasAuraBySpellId(unit, spellID)
 end
 
 local function GroupAllHaveBlessing(spellID)
-	
+    -- Si estás solo, basta con el jugador
     if not UnitHasAuraBySpellId("player", spellID) then
         return false
+    end
+    if not IsInGroup() then
+        return true
     end
 
     local prefix, count
     if IsInRaid() then
         prefix, count = "raid", GetNumGroupMembers()
-    elseif IsInGroup() then
+    else
         prefix, count = "party", GetNumSubgroupMembers()
     end
 
-    if prefix then
-        for i = 1, count do
-            local unit = prefix .. i
-            if UnitExists(unit)
-               and not UnitIsDeadOrGhost(unit)
-               and not UnitHasAuraBySpellId(unit, spellID)
-            then
-                return false
-            end
+    for i = 1, count do
+        local unit = prefix .. i
+        if UnitExists(unit)
+            and not UnitIsDeadOrGhost(unit)
+            and not UnitHasAuraBySpellId(unit, spellID)
+        then
+            return false
         end
     end
 
@@ -171,49 +167,22 @@ end
 
 local function PlayerHasPoison(poisonSpellIDs)
     local i = 1
+
     while true do
         local aura = C_UnitAuras.GetAuraDataByIndex("player", i, "HELPFUL")
-        if not aura then break end
+        if not aura then
+            break
+        end
 
         if aura.spellId and poisonSpellIDs[aura.spellId] then
             return true
         end
+
         i = i + 1
     end
+
     return false
 end
-
-local function ShamanHasWeaponEnchants()
-    local hasMH, _, _, hasOH = GetWeaponEnchantInfo()
-
-    if not hasMH and not hasOH then
-        return false
-    end
-
-    -- Main hand
-    local mainHandLink = GetInventoryItemLink("player", 16)
-    if not mainHandLink then return false end
-
-    -- Off hand
-    local offHandLink = GetInventoryItemLink("player", 17)
-
-    -- Baston
-    if not offHandLink then
-        return true
-    end
-
-    local _, _, _, _, _, _, _, _, offhandEquipLoc = GetItemInfo(offHandLink)
-
-    -- Escudo
-    if offhandEquipLoc == "INVTYPE_SHIELD" then
-        return true
-    end
-
-    -- 2 armas principales (Mejora)
-    return true
-end
-
-
 
 
 local function PlayerHasLethalPoison()
@@ -224,73 +193,82 @@ local function PlayerHasNonLethalPoison()
     return PlayerHasPoison(NON_LETHAL_POISONS)
 end
 
+local function ShamanHasWeaponEnchants()
+    local hasMH, _, _, hasOH = GetWeaponEnchantInfo()
+    -- Si no hay ninguno, no cumple
+    if not hasMH and not hasOH then
+        return false
+    end
+
+    -- Si hay main hand encantada, ya es suficiente para la alerta (tu lógica original devolvía true)
+    -- Mantengo tu intención: si hay bastón o escudo también OK.
+    local offHandLink = GetInventoryItemLink("player", 17)
+    if not offHandLink then
+        return true -- bastón / 2H
+    end
+
+    local _, _, _, _, _, _, _, _, offhandEquipLoc = GetItemInfo(offHandLink)
+    if offhandEquipLoc == "INVTYPE_SHIELD" then
+        return true
+    end
+
+    -- Dual-wield o cualquier offhand: si hay encantamientos detectados, OK
+    return true
+end
+
 local function DKHasWeaponRune()
     local itemLink = GetInventoryItemLink("player", 16)
     if not itemLink then return false end
-
-    -- El formato del link es: item:ITEMID:ENCHANTID:...
     local enchantID = itemLink:match("item:%d+:(%d+):")
-
     return enchantID and tonumber(enchantID) ~= 0
 end
 
 -- ==================================================
--- Anchor
--- Frame utilitario para colocar los mensajes
+-- Anchor + Estilo
 -- ==================================================
 local anchor = CreateFrame("Frame", nil, UIParent)
 anchor:SetPoint("TOP", UIParent, "TOP", 0, -80)
 anchor:SetSize(1, 1)
 
 local function StyleText(fs)
-	-- gris
-    fs:SetTextColor(0.7, 0.7, 0.7, 1)   
-	-- sombra visible
-    fs:SetShadowOffset(2, -2)         
-	-- negro
+    fs:SetTextColor(0.7, 0.7, 0.7, 1)
+    fs:SetShadowOffset(2, -2)
     fs:SetShadowColor(0, 0, 0, 1)
 end
 
--- =========================
--- TEXTOS
--- =========================
-
--- General - Piedras de brujo
+-- ==================================================
+-- Textos (UI)
+-- ==================================================
 local stoneText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 stoneText:SetPoint("TOP", anchor, "TOP", 0, 0)
 stoneText:SetText(L.NO_HEALTHSTONE)
 StyleText(stoneText)
 stoneText:Hide()
 
--- Sacerdote
 local fortitudeText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 fortitudeText:SetPoint("TOP", anchor, "TOP", 0, -60)
 fortitudeText:SetText(L.NO_FORTITUDE)
 StyleText(fortitudeText)
 fortitudeText:Hide()
 
--- Druida
 local wildMarkText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 wildMarkText:SetPoint("TOP", anchor, "TOP", 0, -60)
 wildMarkText:SetText(L.NO_MARK_OF_THE_WILD)
 StyleText(wildMarkText)
 wildMarkText:Hide()
 
--- Evoker
 local bronzeBlessingText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 bronzeBlessingText:SetPoint("TOP", anchor, "TOP", 0, -60)
 bronzeBlessingText:SetText(L.NO_BRONZE_BLESSING)
 StyleText(bronzeBlessingText)
 bronzeBlessingText:Hide()
 
--- Mago
 local arcaneIntellectText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 arcaneIntellectText:SetPoint("TOP", anchor, "TOP", 0, -60)
 arcaneIntellectText:SetText(L.NO_ARCANE_INTELLECT)
 StyleText(arcaneIntellectText)
 arcaneIntellectText:Hide()
 
--- Chaman
 local skyfuryText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 skyfuryText:SetPoint("TOP", anchor, "TOP", 0, -60)
 skyfuryText:SetText(L.NO_SKYFURY)
@@ -303,117 +281,71 @@ shamanWeaponText:SetText(L.NO_SHAMAN_WEAPON_ENCHANT)
 StyleText(shamanWeaponText)
 shamanWeaponText:Hide()
 
--- Paladin
 local devotionText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 devotionText:SetPoint("TOP", anchor, "TOP", 0, -60)
 devotionText:SetText(L.NO_DEVOTION)
 StyleText(devotionText)
 devotionText:Hide()
 
--- Mascotas
 local petText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 petText:SetPoint("TOP", anchor, "TOP", 0, -120)
 petText:SetText(L.NO_PET)
 StyleText(petText)
 petText:Hide()
 
--- Rogue - veneno letal
 local lethalPoisonText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 lethalPoisonText:SetPoint("TOP", anchor, "TOP", 0, -60)
 lethalPoisonText:SetText(L.NO_LETHAL_POISON)
 StyleText(lethalPoisonText)
 lethalPoisonText:Hide()
 
--- Rogue - veneno no letal
 local nonLethalPoisonText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 nonLethalPoisonText:SetPoint("TOP", anchor, "TOP", 0, -120)
 nonLethalPoisonText:SetText(L.NO_NON_LETHAL_POISON)
 StyleText(nonLethalPoisonText)
 nonLethalPoisonText:Hide()
 
--- DK - runa de arma
 local dkRuneText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 dkRuneText:SetPoint("TOP", anchor, "TOP", 0, -60)
 dkRuneText:SetText(L.NO_DK_RUNE)
 StyleText(dkRuneText)
 dkRuneText:Hide()
 
--- =========================
--- Logica de alertas
--- =========================
+local ALL_TEXTS = {
+    dkRuneText,
+    stoneText,
+    petText,
+    fortitudeText,
+    wildMarkText,
+    bronzeBlessingText,
+    devotionText,
+    lethalPoisonText,
+    nonLethalPoisonText,
+    arcaneIntellectText,
+    skyfuryText,
+    shamanWeaponText,
+}
 
-local function UpdateAlerts()
-	
-	-- No funciona en combate por la purga de addons de blizzard
-	if InCombatLockdown() then return end
-
-	if not CanShow() then
-		dkRuneText:Hide()
-	    stoneText:Hide()
-	    petText:Hide()
-	    fortitudeText:Hide()
-		wildMarkText:Hide()
-		bronzeBlessingText:Hide()
-		devotionText:Hide()
-		lethalPoisonText:Hide()
-		nonLethalPoisonText:Hide()
-		arcaneIntellectText:Hide()
-		skyfuryText:Hide()
-	    return
-	end
-
-	-- Piedra de Brujo
-	stoneText:SetShown((PlayerIs("WARLOCK") or GroupHasWarlock()) and not PlayerHasHealthstone())
-
-	-- Mascota
-	petText:SetShown(PlayerShouldHavePet() and not PlayerHasPet())
-
-	-- Palabra de Poder: Entereza
-	fortitudeText:SetShown(PlayerIs("PRIEST") and not GroupAllHaveBlessing(FORTITUDE_SPELL_ID))
-
-	-- Marca de lo Salvaje
-	wildMarkText:SetShown(PlayerIs("DRUID") and not GroupAllHaveBlessing(WILD_MARK_SPELL_ID))
-
-	-- Bendición de Bronce
-	bronzeBlessingText:SetShown(PlayerIs("EVOKER") and not GroupAllHaveBlessing(BRONZE_BLESSING_ID))
-	
-	-- Intelecto Arcano
-	arcaneIntellectText:SetShown(PlayerIs("MAGE") and not GroupAllHaveBlessing(ARCANE_INTELLECT_SPELL_ID))
-
-	-- Aura de devocion
-	devotionText:SetShown(PlayerIs("PALADIN") and not UnitHasAuraBySpellId("player", DEVOTION_AURA_SPELL_ID))
-	
-	-- Furia del cielo
-	skyfuryText:SetShown(PlayerIs("SHAMAN") and not GroupAllHaveBlessing(SKYFURY_SPELL_ID))
-	
-	-- Encantamientos de arma (Chaman)
-	if PlayerIs("SHAMAN") then
-	    shamanWeaponText:SetShown(not ShamanHasWeaponEnchants())
-	else
-	    shamanWeaponText:Hide()
-	end
-
-	
-	-- Venenos de rogue
-	if PlayerIs("ROGUE") then
-	    lethalPoisonText:SetShown(not PlayerHasLethalPoison())
-	    nonLethalPoisonText:SetShown(not PlayerHasNonLethalPoison())
-	else
-	    lethalPoisonText:Hide()
-	    nonLethalPoisonText:Hide()
-	end
-	
-	-- Runa de arma DK
-	dkRuneText:SetShown(PlayerIs("DEATHKNIGHT") and not DKHasWeaponRune())
+local function HideAllTexts()
+    for _, t in ipairs(ALL_TEXTS) do
+        t:Hide()
+    end
 end
 
+-- ==================================================
+-- Talentos
+-- ==================================================
 local function UpdateTalentSummonElemental()
     TALENT_SUMMON_ELEMENTAL_LEARNED = false
+
+    if not (C_ClassTalents and C_ClassTalents.GetActiveConfigID) then return end
 
     local configID = C_ClassTalents.GetActiveConfigID()
     if not configID then return end
 
     local configInfo = C_Traits.GetConfigInfo(configID)
+    if not configInfo or not configInfo.treeIDs then return end
+
     for _, treeID in ipairs(configInfo.treeIDs) do
         local nodes = C_Traits.GetTreeNodes(treeID)
         for _, nodeID in ipairs(nodes) do
@@ -432,10 +364,94 @@ local function UpdateTalentSummonElemental()
     end
 end
 
--- =========================
--- Registro de Eventos
--- =========================
+-- ==================================================
+-- Lógica de alertas (optimizada)
+-- ==================================================
+local function UpdateAlerts()
+    -- No funciona en combate por la purga de addons de blizzard
+    if InCombatLockdown() then return end
 
+    if not CanShow() then
+        HideAllTexts()
+        return
+    end
+
+    -- Healthstone (solo depende de warlock player o en grupo)
+    stoneText:SetShown((PLAYER_CLASS == "WARLOCK" or GROUP_HAS_WARLOCK) and not PlayerHasHealthstone())
+
+    -- Mascota
+    petText:SetShown(PlayerShouldHavePet() and not PlayerHasPet())
+
+    -- Buffos por clase
+    if PLAYER_CLASS == "PRIEST" then
+        fortitudeText:SetShown(not GroupAllHaveBlessing(FORTITUDE_SPELL_ID))
+    else
+        fortitudeText:Hide()
+    end
+
+    if PLAYER_CLASS == "DRUID" then
+        wildMarkText:SetShown(not GroupAllHaveBlessing(WILD_MARK_SPELL_ID))
+    else
+        wildMarkText:Hide()
+    end
+
+    if PLAYER_CLASS == "EVOKER" then
+        bronzeBlessingText:SetShown(not GroupAllHaveBlessing(BRONZE_BLESSING_ID))
+    else
+        bronzeBlessingText:Hide()
+    end
+
+    if PLAYER_CLASS == "MAGE" then
+        arcaneIntellectText:SetShown(not GroupAllHaveBlessing(ARCANE_INTELLECT_SPELL_ID))
+    else
+        arcaneIntellectText:Hide()
+    end
+
+    if PLAYER_CLASS == "PALADIN" then
+        devotionText:SetShown(not UnitHasAuraBySpellId("player", DEVOTION_AURA_SPELL_ID))
+    else
+        devotionText:Hide()
+    end
+
+    if PLAYER_CLASS == "SHAMAN" then
+        skyfuryText:SetShown(not GroupAllHaveBlessing(SKYFURY_SPELL_ID))
+        shamanWeaponText:SetShown(not ShamanHasWeaponEnchants())
+    else
+        skyfuryText:Hide()
+        shamanWeaponText:Hide()
+    end
+
+    if PLAYER_CLASS == "ROGUE" then
+        lethalPoisonText:SetShown(not PlayerHasLethalPoison())
+        nonLethalPoisonText:SetShown(not PlayerHasNonLethalPoison())
+    else
+        lethalPoisonText:Hide()
+        nonLethalPoisonText:Hide()
+    end
+
+    if PLAYER_CLASS == "DEATHKNIGHT" then
+        dkRuneText:SetShown(not DKHasWeaponRune())
+    else
+        dkRuneText:Hide()
+    end
+end
+
+-- ==================================================
+-- Throttling (evita recalcular 20 veces seguidas)
+-- ==================================================
+local pendingUpdate = false
+local function RequestUpdate()
+    if pendingUpdate then return end
+    pendingUpdate = true
+    C_Timer.After(0.10, function()
+        pendingUpdate = false
+        UpdateAlerts()
+    end)
+end
+
+-- ==================================================
+-- Eventos
+-- ==================================================
 local f = CreateFrame("Frame")
 f:RegisterEvent("PLAYER_ENTERING_WORLD")
 f:RegisterEvent("BAG_UPDATE_DELAYED")
@@ -446,24 +462,61 @@ f:RegisterEvent("PLAYER_REGEN_DISABLED")
 f:RegisterEvent("PLAYER_REGEN_ENABLED")
 f:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 f:RegisterEvent("UNIT_INVENTORY_CHANGED")
-f:RegisterEvent("PLAYER_ENTERING_WORLD")
 f:RegisterEvent("UNIT_FLAGS")
 f:RegisterEvent("TRAIT_CONFIG_UPDATED")
 f:RegisterEvent("TRAIT_TREE_CHANGED")
 f:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+f:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 
-f:SetScript("OnEvent", function(_, event, unit)
-	
-	if event == "TRAIT_CONFIG_UPDATED"
-		or event == "TRAIT_TREE_CHANGED"
-		or event == "PLAYER_SPECIALIZATION_CHANGED"
-		or event == "PLAYER_ENTERING_WORLD"
-	then
-		UpdateTalentSummonElemental()
-	end
-	
-    if unit and unit ~= "player" then return end
-    UpdateAlerts()
+f:SetScript("OnEvent", function(_, event, unit, _, spellID)
+
+    -- Entrar en combate
+    if event == "PLAYER_REGEN_DISABLED" then
+        IN_COMBAT = true
+        HideAllTexts()
+        return
+    elseif event == "PLAYER_REGEN_ENABLED" then
+        IN_COMBAT = false
+        RequestUpdate()
+        return
+    end
+
+    -- Si estamos en combate, no hacer absolutamente nada
+    if IN_COMBAT then
+        return
+    end
+
+    -- Actualizar flags de grupo
+    if event == "PLAYER_ENTERING_WORLD" or event == "GROUP_ROSTER_UPDATE" then
+        UpdateGroupFlags()
+    end
+
+    -- Talentos
+    if event == "TRAIT_CONFIG_UPDATED"
+        or event == "TRAIT_TREE_CHANGED"
+        or event == "PLAYER_SPECIALIZATION_CHANGED"
+        or event == "PLAYER_ENTERING_WORLD"
+    then
+        UpdateTalentSummonElemental()
+    end
+
+    -- Rogue: aplicar venenos
+    if event == "UNIT_SPELLCAST_SUCCEEDED" and unit == "player" and PLAYER_CLASS == "ROGUE" then
+        if LETHAL_POISONS[spellID] or NON_LETHAL_POISONS[spellID] then
+            RequestUpdate()
+            return
+        end
+    end
+
+    -- Filtrar UNIT_AURA
+    if event == "UNIT_AURA" and unit ~= "player" then
+        return
+    end
+
+    RequestUpdate()
 end)
 
+-- Inicial
+UpdateGroupFlags()
+UpdateTalentSummonElemental()
 UpdateAlerts()
