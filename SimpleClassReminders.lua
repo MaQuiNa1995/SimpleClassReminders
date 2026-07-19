@@ -144,32 +144,20 @@ local function UnitHasAuraBySpellNames(unit, spellNames)
         end
     end
 
-    if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
-        local i = 1
-        while true do
-            local aura = C_UnitAuras.GetAuraDataByIndex(unit, i, "HELPFUL")
-            if not aura then break end
-            if aura.name and spellNames[aura.name] then
-                return true
-            end
-            i = i + 1
-        end
-    end
-
     return false
 end
 
 local function UnitHasAuraBySpellId(unit, spellID)
     local spellName = GetLocalizedSpellName(spellID)
 
-    -- Vía rápida para player
+    -- Via rapida para player
     if unit == "player" and C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
         if C_UnitAuras.GetPlayerAuraBySpellID(spellID) ~= nil then
             return true
         end
     end
 
-    -- AuraUtil.FindAuraBySpellId / FindAuraByName (si existe)
+    -- API segura (no leer campos de aura en tablas potencialmente "secret")
     if AuraUtil and AuraUtil.FindAuraBySpellId then
         if AuraUtil.FindAuraBySpellId(spellID, unit, "HELPFUL") ~= nil then
             return true
@@ -179,18 +167,6 @@ local function UnitHasAuraBySpellId(unit, spellID)
     if spellName and AuraUtil and AuraUtil.FindAuraByName then
         if AuraUtil.FindAuraByName(spellName, unit, "HELPFUL") ~= nil then
             return true
-        end
-    end
-
-    -- Fallback: iterar auras (último recurso)
-    if C_UnitAuras and C_UnitAuras.GetAuraDataByIndex then
-        local i = 1
-        while true do
-            local aura = C_UnitAuras.GetAuraDataByIndex(unit, i, "HELPFUL")
-            if not aura then break end
-            if aura.spellId == spellID then return true end
-            if spellName and aura.name == spellName then return true end
-            i = i + 1
         end
     end
 
@@ -227,19 +203,13 @@ local function GroupAllHaveBlessing(spellID)
 end
 
 local function PlayerHasPoison(poisonSpellIDs)
-    local i = 1
-
-    while true do
-        local aura = C_UnitAuras.GetAuraDataByIndex("player", i, "HELPFUL")
-        if not aura then
-            break
+    if C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
+        for poisonSpellID in pairs(poisonSpellIDs) do
+            if C_UnitAuras.GetPlayerAuraBySpellID(poisonSpellID) ~= nil then
+                return true
+            end
         end
-
-        if aura.spellId and poisonSpellIDs[aura.spellId] then
-            return true
-        end
-
-        i = i + 1
+        return false
     end
 
     return false
@@ -450,6 +420,8 @@ local ALL_TEXTS = {
 
 local TALENT_SUMMARY_DURATION = 3
 local talentSummaryHideTimer = nil
+local greatVaultLoginNoticePending = false
+local greatVaultLoginNoticeShown = false
 
 local talentSummaryText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 talentSummaryText:SetPoint("TOP", anchor, "TOP", 0, -210)
@@ -458,6 +430,25 @@ talentSummaryText:SetJustifyH("CENTER")
 talentSummaryText:SetJustifyV("TOP")
 StyleText(talentSummaryText)
 talentSummaryText:Hide()
+
+local greatVaultLoginText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+greatVaultLoginText:SetPoint("CENTER", UIParent, "CENTER", 0, 140)
+greatVaultLoginText:SetWidth(1000)
+greatVaultLoginText:SetJustifyH("CENTER")
+greatVaultLoginText:SetJustifyV("MIDDLE")
+StyleText(greatVaultLoginText)
+greatVaultLoginText:Hide()
+
+local greatVaultLoginFade = greatVaultLoginText:CreateAnimationGroup()
+local greatVaultLoginFadeAnim = greatVaultLoginFade:CreateAnimation("Alpha")
+greatVaultLoginFadeAnim:SetOrder(1)
+greatVaultLoginFadeAnim:SetFromAlpha(1)
+greatVaultLoginFadeAnim:SetToAlpha(0)
+greatVaultLoginFadeAnim:SetDuration(7)
+greatVaultLoginFade:SetScript("OnFinished", function()
+    greatVaultLoginText:Hide()
+    greatVaultLoginText:SetAlpha(1)
+end)
 
 local function HideAllTexts()
     for _, t in ipairs(ALL_TEXTS) do
@@ -566,6 +557,30 @@ local function ShowTalentSummary(title)
         talentSummaryText:Hide()
         talentSummaryHideTimer = nil
     end)
+end
+
+local function ShowGreatVaultLoginNotice()
+    greatVaultLoginFade:Stop()
+    greatVaultLoginText:SetAlpha(1)
+    greatVaultLoginText:SetText(L.GREAT_VAULT_AVAILABLE or WEEKLY_REWARDS_UNCLAIMED_TITLE or "You have unclaimed Great Vault rewards!")
+    greatVaultLoginText:Show()
+    greatVaultLoginFade:Play()
+end
+
+local function TryShowGreatVaultLoginNotice()
+    if not greatVaultLoginNoticePending or greatVaultLoginNoticeShown then
+        return
+    end
+
+    if not (C_WeeklyRewards and C_WeeklyRewards.HasAvailableRewards) then
+        return
+    end
+
+    if C_WeeklyRewards.HasAvailableRewards() then
+        ShowGreatVaultLoginNotice()
+        greatVaultLoginNoticeShown = true
+        greatVaultLoginNoticePending = false
+    end
 end
 
 -- ==================================================
@@ -688,6 +703,87 @@ local function RequestUpdate()
 end
 
 -- ==================================================
+-- Group Finder: anuncio al unirse
+-- ==================================================
+local pendingLFGJoinAnnouncement = nil
+local lfgJoinAlreadyAnnounced = false
+
+local function IsGenericActivityName(name)
+    local n = string.lower(tostring(name or ""))
+    return n == ""
+        or n == "mythic+"
+        or n == "mythic keystone"
+        or n == "mítica+"
+        or n == "piedra angular mítica"
+        or n == "piedra angular mitica"
+end
+
+local function BuildLFGJoinAnnouncement(searchResultID, fallbackGroupName)
+    if not (C_LFGList and C_LFGList.GetSearchResultInfo) then
+        return nil
+    end
+
+    local info = C_LFGList.GetSearchResultInfo(searchResultID)
+    if not info then
+        return nil
+    end
+
+    local activityIDs = {}
+    if info.activityIDs and type(info.activityIDs) == "table" then
+        activityIDs = info.activityIDs
+    elseif info.activityID then
+        activityIDs = { info.activityID }
+    end
+
+    local selectedDungeon = nil
+    local fallbackDungeon = nil
+
+    if C_LFGList.GetActivityInfoTable then
+        for _, activityID in ipairs(activityIDs) do
+            local activityInfo = C_LFGList.GetActivityInfoTable(activityID)
+            if activityInfo then
+                local fullName = activityInfo.fullName or activityInfo.name or activityInfo.shortName or ""
+                local shortName = activityInfo.shortName or activityInfo.name or ""
+                local baseName = fullName:gsub("%s*%b()$", "")
+
+                local candidate = shortName
+                if not candidate or candidate == "" then
+                    candidate = baseName
+                end
+
+                if candidate and candidate ~= "" then
+                    if not fallbackDungeon then
+                        fallbackDungeon = candidate
+                    end
+                    if not IsGenericActivityName(candidate) then
+                        selectedDungeon = candidate
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    local listingTitle = info.name or fallbackGroupName or ""
+    local keystoneLevel = listingTitle:match("%+(%d+)")
+
+    return {
+        dungeonOrRaid = selectedDungeon or fallbackDungeon or fallbackGroupName or "Unknown",
+        keystoneLevel = keystoneLevel,
+    }
+end
+
+local function AnnounceLFGJoin(data)
+    if not data then return end
+
+    local dungeonText = tostring(data.dungeonOrRaid)
+    if data.keystoneLevel and data.keystoneLevel ~= "" then
+        dungeonText = string.format("%s (+%s)", dungeonText, data.keystoneLevel)
+    end
+
+    print(string.format(L.GF_DUNGEON_ONLY or "[SimpleClassReminders] Dungeon: %s", dungeonText))
+end
+-- ==================================================
 -- Eventos
 -- ==================================================
 local f = CreateFrame("Frame")
@@ -706,6 +802,8 @@ f:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 f:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 f:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
 f:RegisterEvent("READY_CHECK")
+f:RegisterEvent("LFG_LIST_APPLICATION_STATUS_UPDATED")
+f:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 
 f:SetScript("OnEvent", function(_, event, ...)
     local arg1, _, arg3 = ...
@@ -717,15 +815,52 @@ f:SetScript("OnEvent", function(_, event, ...)
         RequestUpdate()
         return
     end
+    if event == "LFG_LIST_APPLICATION_STATUS_UPDATED" then
+        local searchResultID, newStatus, oldStatus, groupName = ...
+        if newStatus == "invited" or newStatus == "inviteaccepted" then
+            pendingLFGJoinAnnouncement = BuildLFGJoinAnnouncement(searchResultID, groupName)
+            lfgJoinAlreadyAnnounced = false
+        elseif newStatus == "cancelled" or newStatus == "declined" or newStatus == "declined_full"
+            or newStatus == "declined_delisted" or newStatus == "timedout" or newStatus == "invitedeclined"
+        then
+            pendingLFGJoinAnnouncement = nil
+            lfgJoinAlreadyAnnounced = false
+        end
+        return
+    end
+
+    if event == "GROUP_ROSTER_UPDATE" and not IsInGroup() then
+        pendingLFGJoinAnnouncement = nil
+        lfgJoinAlreadyAnnounced = false
+    end
+
+    if event == "GROUP_ROSTER_UPDATE"
+        and IsInGroup()
+        and pendingLFGJoinAnnouncement
+        and not lfgJoinAlreadyAnnounced
+    then
+        AnnounceLFGJoin(pendingLFGJoinAnnouncement)
+        lfgJoinAlreadyAnnounced = true
+    end
 
     if event == "PLAYER_ENTERING_WORLD" then
         local isInitialLogin, isReloadingUI = ...
+        if isInitialLogin and not isReloadingUI then
+            greatVaultLoginNoticePending = true
+            greatVaultLoginNoticeShown = false
+            C_Timer.After(2, TryShowGreatVaultLoginNotice)
+        end
+
         if not isInitialLogin and not isReloadingUI then
             local inInstance, instanceType = IsInInstance()
             if inInstance and (instanceType == "party" or instanceType == "raid") then
                 ShowTalentSummary()
             end
         end
+    end
+
+    if event == "WEEKLY_REWARDS_UPDATE" then
+        TryShowGreatVaultLoginNotice()
     end
 
 	if event == "PLAYER_REGEN_ENABLED" then
@@ -807,3 +942,11 @@ end)
 UpdateGroupFlags()
 UpdateTalentSummonElemental()
 UpdateAlerts()
+
+
+
+
+
+
+
+

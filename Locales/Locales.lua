@@ -16,9 +16,16 @@ if GetLocale() == "esES" or GetLocale() == "esMX" then
     L.NO_NON_LETHAL_POISON     = "¡ SIN VENENO NO LETAL !"
     L.NO_DK_RUNE               = "¡ NO TIENES RUNA EN EL ARMA !"
     L.NO_SHAMAN_WEAPON_ENCHANT = "¡ TE FALTAN ENCANTAMIENTO/S DE ARMA !"
+    L.GREAT_VAULT_AVAILABLE    = "¡ TIENES RECOMPENSAS PENDIENTES EN LA GRAN CAMARA !"
     L.TALENT_SUMMARY_READY     = "READY CHECK"
     L.TALENT_SUMMARY_SPEC      = "Especialización: %s"
     L.TALENT_SUMMARY_LOADOUT   = "Talentos: %s"
+
+    L.GF_JOINED                = "[SimpleClassReminders] Te uniste por Buscador de grupos"
+    L.GF_DIFFICULTY            = "[SimpleClassReminders] Dificultad: %s"
+    L.GF_DUNGEON_RAID          = "[SimpleClassReminders] Mazmorra/Banda: %s"
+    L.GF_LISTING               = "[SimpleClassReminders] Anuncio: %s"
+    L.GF_DUNGEON_ONLY          = "[SimpleClassReminders] Mazmorra: %s"
 else
     L.NO_HEALTHSTONE           = "YOU DON'T HAVE A HEALTHSTONE!"
     L.NO_PET                   = "YOU DON'T HAVE A PET SUMMONED!"
@@ -33,7 +40,14 @@ else
     L.NO_NON_LETHAL_POISON     = "NO NON-LETHAL POISON APPLIED!"
     L.NO_DK_RUNE               = "YOU DON'T HAVE A RUNE ON YOUR WEAPON!"
     L.NO_SHAMAN_WEAPON_ENCHANT = "WEAPON ENCHANT MISSING!"
+    L.GREAT_VAULT_AVAILABLE    = "YOU HAVE UNCLAIMED GREAT VAULT REWARDS!"
     L.TALENT_SUMMARY_READY     = "READY CHECK"
     L.TALENT_SUMMARY_SPEC      = "Specialization: %s"
     L.TALENT_SUMMARY_LOADOUT   = "Talents: %s"
+
+    L.GF_JOINED                = "[SimpleClassReminders] Joined via Group Finder"
+    L.GF_DIFFICULTY            = "[SimpleClassReminders] Difficulty: %s"
+    L.GF_DUNGEON_RAID          = "[SimpleClassReminders] Dungeon/Raid: %s"
+    L.GF_LISTING               = "[SimpleClassReminders] Listing: %s"
+    L.GF_DUNGEON_ONLY          = "[SimpleClassReminders] Dungeon: %s"
 end
