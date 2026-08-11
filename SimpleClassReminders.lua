@@ -439,17 +439,6 @@ greatVaultLoginText:SetJustifyV("MIDDLE")
 StyleText(greatVaultLoginText)
 greatVaultLoginText:Hide()
 
-local greatVaultLoginFade = greatVaultLoginText:CreateAnimationGroup()
-local greatVaultLoginFadeAnim = greatVaultLoginFade:CreateAnimation("Alpha")
-greatVaultLoginFadeAnim:SetOrder(1)
-greatVaultLoginFadeAnim:SetFromAlpha(1)
-greatVaultLoginFadeAnim:SetToAlpha(0)
-greatVaultLoginFadeAnim:SetDuration(7)
-greatVaultLoginFade:SetScript("OnFinished", function()
-    greatVaultLoginText:Hide()
-    greatVaultLoginText:SetAlpha(1)
-end)
-
 local function HideAllTexts()
     for _, t in ipairs(ALL_TEXTS) do
         t:Hide()
@@ -560,11 +549,9 @@ local function ShowTalentSummary(title)
 end
 
 local function ShowGreatVaultLoginNotice()
-    greatVaultLoginFade:Stop()
     greatVaultLoginText:SetAlpha(1)
     greatVaultLoginText:SetText(L.GREAT_VAULT_AVAILABLE or WEEKLY_REWARDS_UNCLAIMED_TITLE or "You have unclaimed Great Vault rewards!")
     greatVaultLoginText:Show()
-    greatVaultLoginFade:Play()
 end
 
 local function TryShowGreatVaultLoginNotice()
@@ -576,11 +563,46 @@ local function TryShowGreatVaultLoginNotice()
         return
     end
 
+    if InCombatLockdown() then
+        return
+    end
+
     if C_WeeklyRewards.HasAvailableRewards() then
         ShowGreatVaultLoginNotice()
         greatVaultLoginNoticeShown = true
         greatVaultLoginNoticePending = false
     end
+end
+
+local function UpdateGreatVaultLoginNotice()
+    if InCombatLockdown() then
+        greatVaultLoginText:Hide()
+        return
+    end
+
+    if not (C_WeeklyRewards and C_WeeklyRewards.HasAvailableRewards) then
+        return
+    end
+
+    if C_WeeklyRewards.HasAvailableRewards() then
+        if greatVaultLoginNoticeShown then
+            ShowGreatVaultLoginNotice()
+        else
+            TryShowGreatVaultLoginNotice()
+        end
+    elseif greatVaultLoginNoticeShown then
+        greatVaultLoginText:Hide()
+        greatVaultLoginNoticeShown = false
+    end
+end
+
+-- Ocultar el aviso en el mismo momento en que se reclama una recompensa.
+if C_WeeklyRewards and C_WeeklyRewards.ClaimReward then
+    hooksecurefunc(C_WeeklyRewards, "ClaimReward", function()
+        greatVaultLoginText:Hide()
+        greatVaultLoginNoticeShown = false
+        greatVaultLoginNoticePending = false
+    end)
 end
 
 -- ==================================================
@@ -793,6 +815,7 @@ f:RegisterEvent("GROUP_ROSTER_UPDATE")
 f:RegisterEvent("UNIT_AURA")
 f:RegisterEvent("UNIT_PET")
 f:RegisterEvent("PLAYER_REGEN_ENABLED")
+f:RegisterEvent("PLAYER_REGEN_DISABLED")
 f:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 f:RegisterEvent("UNIT_INVENTORY_CHANGED")
 f:RegisterEvent("UNIT_FLAGS")
@@ -845,11 +868,11 @@ f:SetScript("OnEvent", function(_, event, ...)
 
     if event == "PLAYER_ENTERING_WORLD" then
         local isInitialLogin, isReloadingUI = ...
-        if isInitialLogin and not isReloadingUI then
-            greatVaultLoginNoticePending = true
-            greatVaultLoginNoticeShown = false
-            C_Timer.After(2, TryShowGreatVaultLoginNotice)
-        end
+        greatVaultLoginNoticePending = true
+        greatVaultLoginNoticeShown = false
+        C_Timer.After(2, TryShowGreatVaultLoginNotice)
+        C_Timer.After(5, TryShowGreatVaultLoginNotice)
+        C_Timer.After(10, TryShowGreatVaultLoginNotice)
 
         if not isInitialLogin and not isReloadingUI then
             local inInstance, instanceType = IsInInstance()
@@ -860,11 +883,18 @@ f:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "WEEKLY_REWARDS_UPDATE" then
-        TryShowGreatVaultLoginNotice()
+        UpdateGreatVaultLoginNotice()
     end
 
 	if event == "PLAYER_REGEN_ENABLED" then
+	    UpdateGreatVaultLoginNotice()
 	    RequestUpdate()
+	    return
+	end
+
+	if event == "PLAYER_REGEN_DISABLED" then
+	    greatVaultLoginText:Hide()
+	    HideAllTexts()
 	    return
 	end
 	
