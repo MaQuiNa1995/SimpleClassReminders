@@ -3,6 +3,7 @@
 ## Notes: Simple class reminders to track buffs, pets etc
 ## Author: MaQuina1995
 ## Version: 1.2.6
+## SavedVariablesPerCharacter: SimpleClassRemindersDB
 
 Locales/Locales.lua
 SimpleClassReminders.lua

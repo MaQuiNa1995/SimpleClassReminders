@@ -16,6 +16,9 @@ Examples:
 ### General
 - **Healthstone Reminder**
   Shows a warning if you are a Warlock, or if there is a Warlock in your group or raid, and you do not have a Healthstone.
+- **Premade Group Finder join message**
+  Caches the official activity while you apply and prints only its dungeon or raid name and difficulty after the group join is confirmed.
+  Mythic+ messages include the keystone level when Blizzard exposes it.
 
 ### Pets
 - **Pet Reminder**
@@ -31,7 +34,7 @@ Examples:
 - **Arcane Intellect (Mage)**
   Warns when Arcane Intellect is missing on one or more alive group or raid members.
 - **Devotion Aura (Paladin)**
-  Notifies when Devotion Aura is not active.
+  Notifies when neither you nor an alive group or raid member has Devotion Aura active.
 - **Skyfury (Shaman)**
   Notifies when Skyfury is missing on one or more alive group or raid members.
 

@@ -2,6 +2,10 @@ local addonName, addon = ...
 addon.L = addon.L or {}
 local L = addon.L
 
+SimpleClassRemindersDB = type(SimpleClassRemindersDB) == "table" and SimpleClassRemindersDB or {}
+local DB = SimpleClassRemindersDB
+DB.greatVault = type(DB.greatVault) == "table" and DB.greatVault or {}
+
 -- ==================================================
 -- Cache / Constantes
 -- ==================================================
@@ -150,6 +154,13 @@ end
 local function UnitHasAuraBySpellId(unit, spellID)
     local spellName = GetLocalizedSpellName(spellID)
 
+    -- API directa actual (Retail 12.x); evita depender de wrappers antiguos de AuraUtil.
+    if C_UnitAuras and C_UnitAuras.GetUnitAuraBySpellID then
+        if C_UnitAuras.GetUnitAuraBySpellID(unit, spellID) ~= nil then
+            return true
+        end
+    end
+
     -- Via rapida para player
     if unit == "player" and C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
         if C_UnitAuras.GetPlayerAuraBySpellID(spellID) ~= nil then
@@ -166,6 +177,34 @@ local function UnitHasAuraBySpellId(unit, spellID)
 
     if spellName and AuraUtil and AuraUtil.FindAuraByName then
         if AuraUtil.FindAuraByName(spellName, unit, "HELPFUL") ~= nil then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function GroupHasAura(spellID)
+    if UnitHasAuraBySpellId("player", spellID) then
+        return true
+    end
+    if not IsInGroup() then
+        return false
+    end
+
+    local prefix, count
+    if IsInRaid() then
+        prefix, count = "raid", GetNumGroupMembers()
+    else
+        prefix, count = "party", GetNumSubgroupMembers()
+    end
+
+    for i = 1, count do
+        local unit = prefix .. i
+        if UnitExists(unit)
+            and not UnitIsDeadOrGhost(unit)
+            and UnitHasAuraBySpellId(unit, spellID)
+        then
             return true
         end
     end
@@ -285,8 +324,6 @@ local function ShamanHasWeaponEnchants()
         return false
     end
 
-    -- Si hay main hand encantada, ya es suficiente para la alerta (tu lógica original devolvía true)
-    -- Mantengo tu intención: si hay bastón o escudo también OK.
     local offHandLink = GetInventoryItemLink("player", 17)
     if not offHandLink then
         return true -- bastón / 2H
@@ -303,7 +340,7 @@ end
 
 local function DKHasWeaponRune()
     local itemLink = GetInventoryItemLink("player", 16)
-    if not itemLink then return false end
+    if not itemLink then return true end
     local enchantID = itemLink:match("item:%d+:(%d+):")
     return enchantID and tonumber(enchantID) ~= 0
 end
@@ -419,9 +456,12 @@ local ALL_TEXTS = {
 }
 
 local TALENT_SUMMARY_DURATION = 3
+local WEEK_SECONDS = 7 * 24 * 60 * 60
 local talentSummaryHideTimer = nil
 local greatVaultLoginNoticePending = false
 local greatVaultLoginNoticeShown = false
+local greatVaultInitialized = false
+local greatVaultCheckGeneration = 0
 
 local talentSummaryText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
 talentSummaryText:SetPoint("TOP", anchor, "TOP", 0, -210)
@@ -548,29 +588,170 @@ local function ShowTalentSummary(title)
     end)
 end
 
+local function GetServerTimestamp()
+    if type(GetServerTime) == "function" then
+        local ok, timestamp = pcall(GetServerTime)
+        if ok and type(timestamp) == "number" and timestamp > 0 then
+            return timestamp
+        end
+    end
+
+    return time()
+end
+
+local function GetWeeklyResetStartTimestamp()
+    if C_DateAndTime and type(C_DateAndTime.GetWeeklyResetStartTime) == "function" then
+        local ok, timestamp = pcall(C_DateAndTime.GetWeeklyResetStartTime)
+        if ok and type(timestamp) == "number" and timestamp > 0 then
+            return math.floor(timestamp)
+        end
+    end
+
+    return nil
+end
+
+local function GetNextWeeklyResetTimestamp()
+    if not (C_DateAndTime and type(C_DateAndTime.GetSecondsUntilWeeklyReset) == "function") then
+        return nil
+    end
+
+    local ok, seconds = pcall(C_DateAndTime.GetSecondsUntilWeeklyReset)
+    if not ok or type(seconds) ~= "number" or seconds < 0 or seconds > WEEK_SECONDS + 3600 then
+        return nil
+    end
+
+    return GetServerTimestamp() + math.floor(seconds)
+end
+
+local function ResetGreatVaultWeeklyState(state, weekStart, resetAt)
+    state.initialized = true
+    state.checked = false
+    state.hasRewards = false
+    state.weekStart = weekStart
+    state.resetAt = resetAt
+    greatVaultLoginNoticePending = true
+    greatVaultLoginNoticeShown = false
+    greatVaultLoginText:Hide()
+end
+
+local function RefreshGreatVaultWeeklyState()
+    local state = DB.greatVault
+    local weekStart = GetWeeklyResetStartTimestamp()
+    local nextResetAt = GetNextWeeklyResetTimestamp()
+    local now = GetServerTimestamp()
+
+    if weekStart then
+        if state.weekStart ~= weekStart then
+            ResetGreatVaultWeeklyState(state, weekStart, nextResetAt)
+        else
+            state.initialized = true
+            state.resetAt = nextResetAt or state.resetAt
+        end
+    elseif type(nextResetAt) == "number" then
+        if state.initialized ~= true or (type(state.resetAt) == "number" and now >= state.resetAt) then
+            ResetGreatVaultWeeklyState(state, nil, nextResetAt)
+        else
+            state.resetAt = nextResetAt
+        end
+    elseif state.initialized ~= true then
+        ResetGreatVaultWeeklyState(state, nil, nil)
+    elseif type(state.resetAt) == "number" and now >= state.resetAt then
+        ResetGreatVaultWeeklyState(state, nil, nil)
+    end
+
+    return state
+end
+
 local function ShowGreatVaultLoginNotice()
     greatVaultLoginText:SetAlpha(1)
     greatVaultLoginText:SetText(L.GREAT_VAULT_AVAILABLE or WEEKLY_REWARDS_UNCLAIMED_TITLE or "You have unclaimed Great Vault rewards!")
     greatVaultLoginText:Show()
 end
 
-local function TryShowGreatVaultLoginNotice()
-    if not greatVaultLoginNoticePending or greatVaultLoginNoticeShown then
-        return
+local function ApplyCachedGreatVaultState()
+    local state = RefreshGreatVaultWeeklyState()
+    if state.checked ~= true then
+        return false
     end
 
-    if not (C_WeeklyRewards and C_WeeklyRewards.HasAvailableRewards) then
-        return
-    end
+    greatVaultLoginNoticePending = false
 
-    if InCombatLockdown() then
-        return
-    end
-
-    if C_WeeklyRewards.HasAvailableRewards() then
+    if state.hasRewards == true and not InCombatLockdown() then
         ShowGreatVaultLoginNotice()
         greatVaultLoginNoticeShown = true
-        greatVaultLoginNoticePending = false
+    else
+        greatVaultLoginText:Hide()
+        greatVaultLoginNoticeShown = false
+    end
+
+    return true
+end
+
+local function CheckGreatVaultRewards(finalizeFalseResult)
+    if ApplyCachedGreatVaultState() then
+        return
+    end
+
+    if not greatVaultLoginNoticePending or InCombatLockdown() then
+        return
+    end
+
+    if not (C_WeeklyRewards and type(C_WeeklyRewards.HasAvailableRewards) == "function") then
+        return
+    end
+
+    local ok, hasRewards = pcall(C_WeeklyRewards.HasAvailableRewards)
+    if not ok or type(hasRewards) ~= "boolean" then
+        return
+    end
+
+    if hasRewards or finalizeFalseResult then
+        local state = RefreshGreatVaultWeeklyState()
+        state.checked = true
+        state.hasRewards = hasRewards
+        ApplyCachedGreatVaultState()
+    end
+end
+
+local function ScheduleGreatVaultChecks()
+    greatVaultCheckGeneration = greatVaultCheckGeneration + 1
+    local generation = greatVaultCheckGeneration
+
+    for index, delay in ipairs({ 2, 5, 10 }) do
+        local finalizeFalseResult = index == 3
+        C_Timer.After(delay, function()
+            if generation == greatVaultCheckGeneration then
+                CheckGreatVaultRewards(finalizeFalseResult)
+            end
+        end)
+    end
+end
+
+local function InitializeGreatVaultLoginNotice()
+    if greatVaultInitialized then
+        return
+    end
+    greatVaultInitialized = true
+
+    local state = RefreshGreatVaultWeeklyState()
+    if state.checked == true then
+        ApplyCachedGreatVaultState()
+    else
+        greatVaultLoginNoticePending = true
+        ScheduleGreatVaultChecks()
+    end
+
+    if type(state.resetAt) == "number" then
+        local secondsUntilReset = state.resetAt - GetServerTimestamp()
+        if secondsUntilReset > 0 and secondsUntilReset <= WEEK_SECONDS + 3600 then
+            C_Timer.After(secondsUntilReset + 5, function()
+                local refreshedState = RefreshGreatVaultWeeklyState()
+                if refreshedState.checked ~= true then
+                    greatVaultLoginNoticePending = true
+                    ScheduleGreatVaultChecks()
+                end
+            end)
+        end
     end
 end
 
@@ -580,25 +761,20 @@ local function UpdateGreatVaultLoginNotice()
         return
     end
 
-    if not (C_WeeklyRewards and C_WeeklyRewards.HasAvailableRewards) then
-        return
-    end
-
-    if C_WeeklyRewards.HasAvailableRewards() then
-        if greatVaultLoginNoticeShown then
-            ShowGreatVaultLoginNotice()
-        else
-            TryShowGreatVaultLoginNotice()
-        end
-    elseif greatVaultLoginNoticeShown then
-        greatVaultLoginText:Hide()
-        greatVaultLoginNoticeShown = false
+    local state = RefreshGreatVaultWeeklyState()
+    if state.checked == true then
+        ApplyCachedGreatVaultState()
+    elseif greatVaultLoginNoticePending then
+        CheckGreatVaultRewards(true)
     end
 end
 
 -- Ocultar el aviso en el mismo momento en que se reclama una recompensa.
 if C_WeeklyRewards and C_WeeklyRewards.ClaimReward then
     hooksecurefunc(C_WeeklyRewards, "ClaimReward", function()
+        local state = RefreshGreatVaultWeeklyState()
+        state.checked = true
+        state.hasRewards = false
         greatVaultLoginText:Hide()
         greatVaultLoginNoticeShown = false
         greatVaultLoginNoticePending = false
@@ -681,7 +857,7 @@ local function UpdateAlerts()
     end
 
     if PLAYER_CLASS == "PALADIN" then
-        devotionText:SetShown(not UnitHasAuraBySpellId("player", DEVOTION_AURA_SPELL_ID))
+        devotionText:SetShown(not GroupHasAura(DEVOTION_AURA_SPELL_ID))
         paladinRiteText:SetShown(not PaladinHasRiteImbue())
     else
         devotionText:Hide()
@@ -727,83 +903,175 @@ end
 -- ==================================================
 -- Group Finder: anuncio al unirse
 -- ==================================================
-local pendingLFGJoinAnnouncement = nil
+local lfgListingCache = {}
+local pendingLFGJoinSearchResultID = nil
 local lfgJoinAlreadyAnnounced = false
 
-local function IsGenericActivityName(name)
-    local n = string.lower(tostring(name or ""))
-    return n == ""
-        or n == "mythic+"
-        or n == "mythic keystone"
-        or n == "mítica+"
-        or n == "piedra angular mítica"
-        or n == "piedra angular mitica"
+local LFG_TERMINAL_STATUS = {
+    cancelled = true,
+    declined = true,
+    declined_full = true,
+    declined_delisted = true,
+    timedout = true,
+    invitedeclined = true,
+}
+
+local function IsSecretLFGValue(value)
+    if type(issecretvalue) ~= "function" then
+        return false
+    end
+    local ok, isSecret = pcall(issecretvalue, value)
+    return not ok or isSecret == true
+end
+
+local function SafeLFGValue(value, expectedType)
+    if IsSecretLFGValue(value) or type(value) ~= expectedType then
+        return nil
+    end
+    if expectedType == "string" and value == "" then
+        return nil
+    end
+    return value
+end
+
+local function SafeLFGField(container, key, expectedType)
+    if not SafeLFGValue(container, "table") then
+        return nil
+    end
+    local ok, value = pcall(function()
+        return container[key]
+    end)
+    return ok and SafeLFGValue(value, expectedType) or nil
+end
+
+local function GetLFGDifficulty(activityInfo)
+    local difficultyID = SafeLFGField(activityInfo, "difficultyID", "number")
+    if difficultyID and type(GetDifficultyInfo) == "function" then
+        local ok, difficultyName = pcall(GetDifficultyInfo, difficultyID)
+        difficultyName = ok and SafeLFGValue(difficultyName, "string") or nil
+        if difficultyName then
+            return difficultyName
+        end
+    end
+
+    if SafeLFGField(activityInfo, "isMythicPlusActivity", "boolean") == true then
+        return SafeLFGValue(_G.CHALLENGE_MODE, "string") or "Mythic+"
+    elseif SafeLFGField(activityInfo, "isMythicActivity", "boolean") == true then
+        return SafeLFGValue(_G.PLAYER_DIFFICULTY6, "string") or "Mythic"
+    elseif SafeLFGField(activityInfo, "isHeroicActivity", "boolean") == true then
+        return SafeLFGValue(_G.PLAYER_DIFFICULTY2, "string") or "Heroic"
+    elseif SafeLFGField(activityInfo, "isNormalActivity", "boolean") == true then
+        return SafeLFGValue(_G.PLAYER_DIFFICULTY1, "string") or "Normal"
+    end
+
+    return nil
 end
 
 local function BuildLFGJoinAnnouncement(searchResultID, fallbackGroupName)
-    if not (C_LFGList and C_LFGList.GetSearchResultInfo) then
+    searchResultID = SafeLFGValue(searchResultID, "number")
+    if not searchResultID or type(C_LFGList) ~= "table" then
         return nil
     end
 
-    local info = C_LFGList.GetSearchResultInfo(searchResultID)
+    local info
+    if type(C_LFGList.GetSearchResultInfo) == "function" then
+        local ok, value = pcall(C_LFGList.GetSearchResultInfo, searchResultID)
+        info = ok and SafeLFGValue(value, "table") or nil
+    end
     if not info then
         return nil
     end
 
-    local activityIDs = {}
-    if info.activityIDs and type(info.activityIDs) == "table" then
-        activityIDs = info.activityIDs
-    elseif info.activityID then
-        activityIDs = { info.activityID }
+    local data = {
+        listingName = SafeLFGField(info, "name", "string")
+            or SafeLFGValue(fallbackGroupName, "string"),
+    }
+    local activityIDs = SafeLFGField(info, "activityIDs", "table")
+    data.activityID = activityIDs and SafeLFGField(activityIDs, 1, "number")
+        or SafeLFGField(info, "activityID", "number")
+    if not data.activityID then
+        return data
     end
 
-    local selectedDungeon = nil
-    local fallbackDungeon = nil
+    local questID = SafeLFGField(info, "questID", "number")
+    local isWarMode = SafeLFGField(info, "isWarMode", "boolean")
+    local activityInfo
+    if type(C_LFGList.GetActivityInfoTable) == "function" then
+        local ok, value = pcall(C_LFGList.GetActivityInfoTable, data.activityID, questID, isWarMode)
+        activityInfo = ok and SafeLFGValue(value, "table") or nil
+    end
 
-    if C_LFGList.GetActivityInfoTable then
-        for _, activityID in ipairs(activityIDs) do
-            local activityInfo = C_LFGList.GetActivityInfoTable(activityID)
-            if activityInfo then
-                local fullName = activityInfo.fullName or activityInfo.name or activityInfo.shortName or ""
-                local shortName = activityInfo.shortName or activityInfo.name or ""
-                local baseName = fullName:gsub("%s*%b()$", "")
+    if type(C_LFGList.GetActivityFullName) == "function" then
+        local ok, fullName = pcall(C_LFGList.GetActivityFullName, data.activityID, questID, isWarMode)
+        data.activityName = ok and SafeLFGValue(fullName, "string") or nil
+    end
+    if activityInfo then
+        data.activityName = data.activityName
+            or SafeLFGField(activityInfo, "fullName", "string")
+            or SafeLFGField(activityInfo, "shortName", "string")
+        data.difficultyName = GetLFGDifficulty(activityInfo)
+        data.isMythicPlus = SafeLFGField(activityInfo, "isMythicPlusActivity", "boolean") == true
+    end
 
-                local candidate = shortName
-                if not candidate or candidate == "" then
-                    candidate = baseName
-                end
-
-                if candidate and candidate ~= "" then
-                    if not fallbackDungeon then
-                        fallbackDungeon = candidate
-                    end
-                    if not IsGenericActivityName(candidate) then
-                        selectedDungeon = candidate
-                        break
-                    end
-                end
-            end
+    if data.isMythicPlus and type(C_LFGList.GetKeystoneForActivity) == "function" then
+        local ok, level = pcall(C_LFGList.GetKeystoneForActivity, data.activityID)
+        level = ok and SafeLFGValue(level, "number") or nil
+        if level and level > 0 then
+            data.keystoneLevel = math.floor(level)
+        end
+    end
+    if data.isMythicPlus and not data.keystoneLevel and data.listingName then
+        local parsedLevel = data.listingName:match("%+(%d+)%f[%D]")
+        parsedLevel = parsedLevel and tonumber(parsedLevel) or nil
+        if parsedLevel and parsedLevel > 0 then
+            data.keystoneLevel = math.floor(parsedLevel)
         end
     end
 
-    local listingTitle = info.name or fallbackGroupName or ""
-    local keystoneLevel = listingTitle:match("%+(%d+)")
+    return data
+end
 
-    return {
-        dungeonOrRaid = selectedDungeon or fallbackDungeon or fallbackGroupName or "Unknown",
-        keystoneLevel = keystoneLevel,
-    }
+local function CacheLFGListing(searchResultID, fallbackGroupName)
+    searchResultID = SafeLFGValue(searchResultID, "number")
+    if not searchResultID then return nil end
+
+    local cached = lfgListingCache[searchResultID] or {}
+    local fresh = BuildLFGJoinAnnouncement(searchResultID, fallbackGroupName)
+    if fresh then
+        for key, value in pairs(fresh) do
+            cached[key] = value
+        end
+        lfgListingCache[searchResultID] = cached
+    end
+    return lfgListingCache[searchResultID]
 end
 
 local function AnnounceLFGJoin(data)
-    if not data then return end
+    if type(data) ~= "table" then return false end
 
-    local dungeonText = tostring(data.dungeonOrRaid)
-    if data.keystoneLevel and data.keystoneLevel ~= "" then
-        dungeonText = string.format("%s (+%s)", dungeonText, data.keystoneLevel)
+    local activityName = SafeLFGValue(data.activityName, "string")
+    if not activityName then return false end
+
+    local difficultyName = SafeLFGValue(data.difficultyName, "string")
+    if difficultyName then
+        local escapedDifficulty = difficultyName:gsub("(%W)", "%%%1")
+        activityName = activityName:gsub("%s*%(" .. escapedDifficulty .. "%)%s*$", "")
     end
 
-    print(string.format(L.GF_DUNGEON_ONLY or "[SimpleClassReminders] Dungeon: %s", dungeonText))
+    local keystoneLevel = SafeLFGValue(data.keystoneLevel, "number")
+    if keystoneLevel and keystoneLevel > 0 then
+        local keyText = "+" .. tostring(math.floor(keystoneLevel))
+        difficultyName = difficultyName and (difficultyName .. " " .. keyText) or keyText
+    end
+
+    if difficultyName then
+        print(string.format(L.GF_ACTIVITY_DIFFICULTY
+            or "[SimpleClassReminders] %s | %s", activityName, difficultyName))
+    else
+        print(string.format(L.GF_ACTIVITY_ONLY
+            or "[SimpleClassReminders] %s", activityName))
+    end
+    return true
 end
 -- ==================================================
 -- Eventos
@@ -826,6 +1094,8 @@ f:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
 f:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
 f:RegisterEvent("READY_CHECK")
 f:RegisterEvent("LFG_LIST_APPLICATION_STATUS_UPDATED")
+f:RegisterEvent("LFG_LIST_SEARCH_RESULT_UPDATED")
+f:RegisterEvent("LFG_LIST_JOINED_GROUP")
 f:RegisterEvent("WEEKLY_REWARDS_UPDATE")
 
 f:SetScript("OnEvent", function(_, event, ...)
@@ -838,41 +1108,70 @@ f:SetScript("OnEvent", function(_, event, ...)
         RequestUpdate()
         return
     end
+
     if event == "LFG_LIST_APPLICATION_STATUS_UPDATED" then
         local searchResultID, newStatus, oldStatus, groupName = ...
-        if newStatus == "invited" or newStatus == "inviteaccepted" then
-            pendingLFGJoinAnnouncement = BuildLFGJoinAnnouncement(searchResultID, groupName)
+        searchResultID = SafeLFGValue(searchResultID, "number")
+        newStatus = SafeLFGValue(newStatus, "string")
+
+        if searchResultID and (newStatus == "applied" or newStatus == "invited" or newStatus == "inviteaccepted") then
+            CacheLFGListing(searchResultID, groupName)
+        end
+        if searchResultID and newStatus == "invited" then
             lfgJoinAlreadyAnnounced = false
-        elseif newStatus == "cancelled" or newStatus == "declined" or newStatus == "declined_full"
-            or newStatus == "declined_delisted" or newStatus == "timedout" or newStatus == "invitedeclined"
-        then
-            pendingLFGJoinAnnouncement = nil
+        elseif searchResultID and newStatus == "inviteaccepted" then
+            pendingLFGJoinSearchResultID = searchResultID
             lfgJoinAlreadyAnnounced = false
+        elseif searchResultID and (LFG_TERMINAL_STATUS[newStatus]
+            or (newStatus == "none" and pendingLFGJoinSearchResultID ~= searchResultID)) then
+            lfgListingCache[searchResultID] = nil
+            if pendingLFGJoinSearchResultID == searchResultID then
+                pendingLFGJoinSearchResultID = nil
+                lfgJoinAlreadyAnnounced = false
+            end
         end
         return
     end
 
-    if event == "GROUP_ROSTER_UPDATE" and not IsInGroup() then
-        pendingLFGJoinAnnouncement = nil
-        lfgJoinAlreadyAnnounced = false
+    if event == "LFG_LIST_SEARCH_RESULT_UPDATED" then
+        local searchResultID = ...
+        searchResultID = SafeLFGValue(searchResultID, "number")
+        if searchResultID and lfgListingCache[searchResultID] then
+            CacheLFGListing(searchResultID)
+        end
+        return
     end
 
-    if event == "GROUP_ROSTER_UPDATE"
-        and IsInGroup()
-        and pendingLFGJoinAnnouncement
-        and not lfgJoinAlreadyAnnounced
-    then
-        AnnounceLFGJoin(pendingLFGJoinAnnouncement)
-        lfgJoinAlreadyAnnounced = true
+    if event == "LFG_LIST_JOINED_GROUP" then
+        local searchResultID, groupName = ...
+        searchResultID = SafeLFGValue(searchResultID, "number")
+        if searchResultID then
+            local data = CacheLFGListing(searchResultID, groupName)
+                or lfgListingCache[searchResultID]
+            if not lfgJoinAlreadyAnnounced and AnnounceLFGJoin(data) then
+                lfgJoinAlreadyAnnounced = true
+            end
+            lfgListingCache[searchResultID] = nil
+            if pendingLFGJoinSearchResultID == searchResultID then
+                pendingLFGJoinSearchResultID = nil
+            end
+        end
+        return
+    end
+
+    if event == "GROUP_ROSTER_UPDATE" and IsInGroup()
+        and pendingLFGJoinSearchResultID and not lfgJoinAlreadyAnnounced then
+        local data = lfgListingCache[pendingLFGJoinSearchResultID]
+        if AnnounceLFGJoin(data) then
+            lfgJoinAlreadyAnnounced = true
+            lfgListingCache[pendingLFGJoinSearchResultID] = nil
+            pendingLFGJoinSearchResultID = nil
+        end
     end
 
     if event == "PLAYER_ENTERING_WORLD" then
         local isInitialLogin, isReloadingUI = ...
-        greatVaultLoginNoticePending = true
-        greatVaultLoginNoticeShown = false
-        C_Timer.After(2, TryShowGreatVaultLoginNotice)
-        C_Timer.After(5, TryShowGreatVaultLoginNotice)
-        C_Timer.After(10, TryShowGreatVaultLoginNotice)
+        InitializeGreatVaultLoginNotice()
 
         if not isInitialLogin and not isReloadingUI then
             local inInstance, instanceType = IsInInstance()
@@ -897,7 +1196,7 @@ f:SetScript("OnEvent", function(_, event, ...)
 	    HideAllTexts()
 	    return
 	end
-	
+
 	if InCombatLockdown() then
 	    HideAllTexts()
 	    return
@@ -955,6 +1254,7 @@ f:SetScript("OnEvent", function(_, event, ...)
             or PLAYER_CLASS == "DRUID"
             or PLAYER_CLASS == "EVOKER"
             or PLAYER_CLASS == "MAGE"
+            or PLAYER_CLASS == "PALADIN"
             or PLAYER_CLASS == "SHAMAN")
 
         if arg1 ~= "player" then

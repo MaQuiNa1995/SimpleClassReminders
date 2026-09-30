@@ -26,6 +26,8 @@ if GetLocale() == "esES" or GetLocale() == "esMX" then
     L.GF_DUNGEON_RAID          = "[SimpleClassReminders] Mazmorra/Banda: %s"
     L.GF_LISTING               = "[SimpleClassReminders] Anuncio: %s"
     L.GF_DUNGEON_ONLY          = "[SimpleClassReminders] Mazmorra: %s"
+    L.GF_ACTIVITY_DIFFICULTY   = "[SimpleClassReminders] %s | %s"
+    L.GF_ACTIVITY_ONLY         = "[SimpleClassReminders] %s"
 else
     L.NO_HEALTHSTONE           = "YOU DON'T HAVE A HEALTHSTONE!"
     L.NO_PET                   = "YOU DON'T HAVE A PET SUMMONED!"
@@ -50,4 +52,6 @@ else
     L.GF_DUNGEON_RAID          = "[SimpleClassReminders] Dungeon/Raid: %s"
     L.GF_LISTING               = "[SimpleClassReminders] Listing: %s"
     L.GF_DUNGEON_ONLY          = "[SimpleClassReminders] Dungeon: %s"
+    L.GF_ACTIVITY_DIFFICULTY   = "[SimpleClassReminders] %s | %s"
+    L.GF_ACTIVITY_ONLY         = "[SimpleClassReminders] %s"
 end
