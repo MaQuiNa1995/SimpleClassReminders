@@ -93,7 +93,7 @@ local function GetLocalizedSpellName(spellID)
         end
     end
 
-    local spellName = GetSpellInfo(spellID)
+    local spellName = GetSpellInfo and GetSpellInfo(spellID)
     if type(spellName) == "string" and spellName ~= "" then
         return spellName
     end
@@ -103,7 +103,7 @@ end
 
 local function PlayerHasHealthstone()
     for _, itemID in ipairs(HEALTHSTONE_ITEM_IDS) do
-        local count = GetItemCount(itemID, false, false)
+        local count = C_Item.GetItemCount(itemID, false, false)
         if count and count > 0 then
             return true
         end
@@ -152,8 +152,6 @@ local function UnitHasAuraBySpellNames(unit, spellNames)
 end
 
 local function UnitHasAuraBySpellId(unit, spellID)
-    local spellName = GetLocalizedSpellName(spellID)
-
     -- API directa actual (Retail 12.x); evita depender de wrappers antiguos de AuraUtil.
     if C_UnitAuras and C_UnitAuras.GetUnitAuraBySpellID then
         if C_UnitAuras.GetUnitAuraBySpellID(unit, spellID) ~= nil then
@@ -175,6 +173,7 @@ local function UnitHasAuraBySpellId(unit, spellID)
         end
     end
 
+    local spellName = GetLocalizedSpellName(spellID)
     if spellName and AuraUtil and AuraUtil.FindAuraByName then
         if AuraUtil.FindAuraByName(spellName, unit, "HELPFUL") ~= nil then
             return true
@@ -182,6 +181,71 @@ local function UnitHasAuraBySpellId(unit, spellID)
     end
 
     return false
+end
+
+local function UnitIsInCurrentInstance(unit)
+    -- En banda, el roster expone la zona real de cada miembro aunque todavía
+    -- no haya entrado. Compararla evita confundir una aura inaccesible con una
+    -- aura ausente.
+    local raidIndex = unit:match("^raid(%d+)$")
+    if raidIndex then
+        local memberZone = select(7, GetRaidRosterInfo(tonumber(raidIndex)))
+        local playerZone = GetRealZoneText()
+        if memberZone and memberZone ~= "" and playerZone and playerZone ~= "" then
+            return memberZone == playerZone
+        end
+    end
+
+    -- Para grupos de mazmorra se comparan los mapas. El grupo de mapas cubre
+    -- las distintas plantas que pueda tener una misma instancia.
+    if C_Map and C_Map.GetBestMapForUnit then
+        local playerMapID = C_Map.GetBestMapForUnit("player")
+        local unitMapID = C_Map.GetBestMapForUnit(unit)
+        if playerMapID and unitMapID then
+            if playerMapID == unitMapID then
+                return true
+            end
+
+            if C_Map.GetMapGroupID then
+                local playerMapGroupID = C_Map.GetMapGroupID(playerMapID)
+                local unitMapGroupID = C_Map.GetMapGroupID(unitMapID)
+                if playerMapGroupID and playerMapGroupID > 0
+                    and playerMapGroupID == unitMapGroupID
+                then
+                    return true
+                end
+            end
+
+            if EJ_GetInstanceForMap then
+                local playerJournalID = EJ_GetInstanceForMap(playerMapID)
+                local unitJournalID = EJ_GetInstanceForMap(unitMapID)
+                if playerJournalID and playerJournalID > 0
+                    and playerJournalID == unitJournalID
+                then
+                    return true
+                end
+            end
+
+            return false
+        end
+    end
+
+    -- Si Blizzard no ofrece ubicación para esa unidad, no se usa para generar
+    -- un aviso potencialmente falso.
+    return false
+end
+
+local function ShouldCheckGroupBuffUnit(unit)
+    if not UnitExists(unit) or UnitIsDeadOrGhost(unit) then
+        return false
+    end
+
+    local inInstance, instanceType = IsInInstance()
+    if inInstance and (instanceType == "party" or instanceType == "raid") then
+        return UnitIsInCurrentInstance(unit)
+    end
+
+    return true
 end
 
 local function GroupHasAura(spellID)
@@ -201,8 +265,7 @@ local function GroupHasAura(spellID)
 
     for i = 1, count do
         local unit = prefix .. i
-        if UnitExists(unit)
-            and not UnitIsDeadOrGhost(unit)
+        if ShouldCheckGroupBuffUnit(unit)
             and UnitHasAuraBySpellId(unit, spellID)
         then
             return true
@@ -230,8 +293,7 @@ local function GroupAllHaveBlessing(spellID)
 
     for i = 1, count do
         local unit = prefix .. i
-        if UnitExists(unit)
-            and not UnitIsDeadOrGhost(unit)
+        if ShouldCheckGroupBuffUnit(unit)
             and not UnitHasAuraBySpellId(unit, spellID)
         then
             return false
@@ -329,7 +391,7 @@ local function ShamanHasWeaponEnchants()
         return true -- bastón / 2H
     end
 
-    local _, _, _, _, _, _, _, _, offhandEquipLoc = GetItemInfo(offHandLink)
+    local _, _, _, _, _, _, _, _, offhandEquipLoc = C_Item.GetItemInfo(offHandLink)
     if offhandEquipLoc == "INVTYPE_SHIELD" then
         return true
     end
@@ -905,7 +967,10 @@ end
 -- ==================================================
 local lfgListingCache = {}
 local pendingLFGJoinSearchResultID = nil
-local lfgJoinAlreadyAnnounced = false
+-- LFG_LIST_JOINED_GROUP y GROUP_ROSTER_UPDATE pueden llegar en distinto orden.
+-- Se guarda cada resultado ya anunciado para que ambos eventos no impriman
+-- el mismo aviso.
+local announcedLFGJoinSearchResultIDs = {}
 
 local LFG_TERMINAL_STATUS = {
     cancelled = true,
@@ -1011,6 +1076,7 @@ local function BuildLFGJoinAnnouncement(searchResultID, fallbackGroupName)
             or SafeLFGField(activityInfo, "shortName", "string")
         data.difficultyName = GetLFGDifficulty(activityInfo)
         data.isMythicPlus = SafeLFGField(activityInfo, "isMythicPlusActivity", "boolean") == true
+        data.isRaid = SafeLFGField(activityInfo, "isCurrentRaidActivity", "boolean") == true
     end
 
     if data.isMythicPlus and type(C_LFGList.GetKeystoneForActivity) == "function" then
@@ -1059,17 +1125,17 @@ local function AnnounceLFGJoin(data)
     end
 
     local keystoneLevel = SafeLFGValue(data.keystoneLevel, "number")
-    if keystoneLevel and keystoneLevel > 0 then
-        local keyText = "+" .. tostring(math.floor(keystoneLevel))
-        difficultyName = difficultyName and (difficultyName .. " " .. keyText) or keyText
-    end
-
-    if difficultyName then
+    if data.isMythicPlus and keystoneLevel and keystoneLevel > 0 then
+        print(string.format(L.GF_ACTIVITY_KEYSTONE
+            or "[SimpleClassReminders] Has entrado a un grupo para: %s +%d",
+            activityName, math.floor(keystoneLevel)))
+    elseif data.isRaid and difficultyName then
         print(string.format(L.GF_ACTIVITY_DIFFICULTY
-            or "[SimpleClassReminders] %s | %s", activityName, difficultyName))
+            or "[SimpleClassReminders] Has entrado a un grupo para: %s | %s",
+            activityName, difficultyName))
     else
         print(string.format(L.GF_ACTIVITY_ONLY
-            or "[SimpleClassReminders] %s", activityName))
+            or "[SimpleClassReminders] Has entrado a un grupo para: %s", activityName))
     end
     return true
 end
@@ -1117,17 +1183,16 @@ f:SetScript("OnEvent", function(_, event, ...)
         if searchResultID and (newStatus == "applied" or newStatus == "invited" or newStatus == "inviteaccepted") then
             CacheLFGListing(searchResultID, groupName)
         end
-        if searchResultID and newStatus == "invited" then
-            lfgJoinAlreadyAnnounced = false
+        if searchResultID and newStatus == "applied" then
+            -- Una solicitud nueva para este resultado puede anunciarse.
+            announcedLFGJoinSearchResultIDs[searchResultID] = nil
         elseif searchResultID and newStatus == "inviteaccepted" then
             pendingLFGJoinSearchResultID = searchResultID
-            lfgJoinAlreadyAnnounced = false
         elseif searchResultID and (LFG_TERMINAL_STATUS[newStatus]
             or (newStatus == "none" and pendingLFGJoinSearchResultID ~= searchResultID)) then
             lfgListingCache[searchResultID] = nil
             if pendingLFGJoinSearchResultID == searchResultID then
                 pendingLFGJoinSearchResultID = nil
-                lfgJoinAlreadyAnnounced = false
             end
         end
         return
@@ -1148,8 +1213,8 @@ f:SetScript("OnEvent", function(_, event, ...)
         if searchResultID then
             local data = CacheLFGListing(searchResultID, groupName)
                 or lfgListingCache[searchResultID]
-            if not lfgJoinAlreadyAnnounced and AnnounceLFGJoin(data) then
-                lfgJoinAlreadyAnnounced = true
+            if not announcedLFGJoinSearchResultIDs[searchResultID] and AnnounceLFGJoin(data) then
+                announcedLFGJoinSearchResultIDs[searchResultID] = true
             end
             lfgListingCache[searchResultID] = nil
             if pendingLFGJoinSearchResultID == searchResultID then
@@ -1160,10 +1225,11 @@ f:SetScript("OnEvent", function(_, event, ...)
     end
 
     if event == "GROUP_ROSTER_UPDATE" and IsInGroup()
-        and pendingLFGJoinSearchResultID and not lfgJoinAlreadyAnnounced then
+        and pendingLFGJoinSearchResultID
+        and not announcedLFGJoinSearchResultIDs[pendingLFGJoinSearchResultID] then
         local data = lfgListingCache[pendingLFGJoinSearchResultID]
         if AnnounceLFGJoin(data) then
-            lfgJoinAlreadyAnnounced = true
+            announcedLFGJoinSearchResultIDs[pendingLFGJoinSearchResultID] = true
             lfgListingCache[pendingLFGJoinSearchResultID] = nil
             pendingLFGJoinSearchResultID = nil
         end

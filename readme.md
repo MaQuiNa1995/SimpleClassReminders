@@ -17,14 +17,15 @@ Examples:
 - **Healthstone Reminder**
   Shows a warning if you are a Warlock, or if there is a Warlock in your group or raid, and you do not have a Healthstone.
 - **Premade Group Finder join message**
-  Caches the official activity while you apply and prints only its dungeon or raid name and difficulty after the group join is confirmed.
-  Mythic+ messages include the keystone level when Blizzard exposes it.
+  Caches the official activity while you apply and, after the group join is confirmed, prints a single message. Mythic+ dungeons include the keystone level; raids include their difficulty.
 
 ### Pets
 - **Pet Reminder**
   Alerts you if your class/spec should have a pet and no pet is currently summoned.
 
 ### Buff Reminders
+When you are inside a dungeon or raid, group-buff checks ignore roster members who have not entered the instance yet.
+
 - **Power Word: Fortitude (Priest)**
   Warns when Fortitude is missing on one or more alive group or raid members.
 - **Mark of the Wild (Druid)**
