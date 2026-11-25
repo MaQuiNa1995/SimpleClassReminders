@@ -5,6 +5,9 @@ local L = addon.L
 SimpleClassRemindersDB = type(SimpleClassRemindersDB) == "table" and SimpleClassRemindersDB or {}
 local DB = SimpleClassRemindersDB
 DB.greatVault = type(DB.greatVault) == "table" and DB.greatVault or {}
+if type(DB.greatVaultDuration) ~= "number" or DB.greatVaultDuration < 0 then
+    DB.greatVaultDuration = 14
+end
 
 -- ==================================================
 -- Cache / Constantes
@@ -86,16 +89,9 @@ local function CanShow()
 end
 
 local function GetLocalizedSpellName(spellID)
-    if C_Spell and C_Spell.GetSpellInfo then
-        local spellInfo = C_Spell.GetSpellInfo(spellID)
-        if spellInfo and spellInfo.name and spellInfo.name ~= "" then
-            return spellInfo.name
-        end
-    end
-
-    local spellName = GetSpellInfo and GetSpellInfo(spellID)
-    if type(spellName) == "string" and spellName ~= "" then
-        return spellName
+    local spellInfo = C_Spell.GetSpellInfo(spellID)
+    if spellInfo and spellInfo.name and spellInfo.name ~= "" then
+        return spellInfo.name
     end
 
     return nil
@@ -140,11 +136,9 @@ end
 local function UnitHasAuraBySpellNames(unit, spellNames)
     if not spellNames then return false end
 
-    if AuraUtil and AuraUtil.FindAuraByName then
-        for spellName in pairs(spellNames) do
-            if AuraUtil.FindAuraByName(spellName, unit, "HELPFUL") then
-                return true
-            end
+    for spellName in pairs(spellNames) do
+        if C_UnitAuras.GetAuraDataBySpellName(unit, spellName, "HELPFUL") ~= nil then
+            return true
         end
     end
 
@@ -152,35 +146,7 @@ local function UnitHasAuraBySpellNames(unit, spellNames)
 end
 
 local function UnitHasAuraBySpellId(unit, spellID)
-    -- API directa actual (Retail 12.x); evita depender de wrappers antiguos de AuraUtil.
-    if C_UnitAuras and C_UnitAuras.GetUnitAuraBySpellID then
-        if C_UnitAuras.GetUnitAuraBySpellID(unit, spellID) ~= nil then
-            return true
-        end
-    end
-
-    -- Via rapida para player
-    if unit == "player" and C_UnitAuras and C_UnitAuras.GetPlayerAuraBySpellID then
-        if C_UnitAuras.GetPlayerAuraBySpellID(spellID) ~= nil then
-            return true
-        end
-    end
-
-    -- API segura (no leer campos de aura en tablas potencialmente "secret")
-    if AuraUtil and AuraUtil.FindAuraBySpellId then
-        if AuraUtil.FindAuraBySpellId(spellID, unit, "HELPFUL") ~= nil then
-            return true
-        end
-    end
-
-    local spellName = GetLocalizedSpellName(spellID)
-    if spellName and AuraUtil and AuraUtil.FindAuraByName then
-        if AuraUtil.FindAuraByName(spellName, unit, "HELPFUL") ~= nil then
-            return true
-        end
-    end
-
-    return false
+    return C_UnitAuras.GetUnitAuraBySpellID(unit, spellID) ~= nil
 end
 
 local function UnitIsInCurrentInstance(unit)
@@ -523,6 +489,9 @@ local talentSummaryHideTimer = nil
 local greatVaultLoginNoticePending = false
 local greatVaultLoginNoticeShown = false
 local greatVaultInitialized = false
+local greatVaultNoticeExpired = false
+local greatVaultLoginTime = nil
+local greatVaultTimerGeneration = 0
 local greatVaultCheckGeneration = 0
 
 local talentSummaryText = UIParent:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
@@ -689,6 +658,7 @@ local function ResetGreatVaultWeeklyState(state, weekStart, resetAt)
     state.initialized = true
     state.checked = false
     state.hasRewards = false
+    state.claimed = false
     state.weekStart = weekStart
     state.resetAt = resetAt
     greatVaultLoginNoticePending = true
@@ -738,7 +708,10 @@ local function ApplyCachedGreatVaultState()
 
     greatVaultLoginNoticePending = false
 
-    if state.hasRewards == true and not InCombatLockdown() then
+    if state.hasRewards == true and not greatVaultNoticeExpired
+        and (DB.greatVaultDuration == 0 and C_PvP and C_PvP.GetZonePVPInfo
+            and C_PvP.GetZonePVPInfo() == "sanctuary"
+            or DB.greatVaultDuration ~= 0 and not InCombatLockdown()) then
         ShowGreatVaultLoginNotice()
         greatVaultLoginNoticeShown = true
     else
@@ -750,11 +723,8 @@ local function ApplyCachedGreatVaultState()
 end
 
 local function CheckGreatVaultRewards(finalizeFalseResult)
-    if ApplyCachedGreatVaultState() then
-        return
-    end
-
-    if not greatVaultLoginNoticePending or InCombatLockdown() then
+    local state = RefreshGreatVaultWeeklyState()
+    if state.claimed == true or InCombatLockdown() then
         return
     end
 
@@ -767,10 +737,9 @@ local function CheckGreatVaultRewards(finalizeFalseResult)
         return
     end
 
-    if hasRewards or finalizeFalseResult then
-        local state = RefreshGreatVaultWeeklyState()
+    if hasRewards then
         state.checked = true
-        state.hasRewards = hasRewards
+        state.hasRewards = true
         ApplyCachedGreatVaultState()
     end
 end
@@ -789,16 +758,39 @@ local function ScheduleGreatVaultChecks()
     end
 end
 
+local function ConfigureGreatVaultTimer()
+    greatVaultTimerGeneration = greatVaultTimerGeneration + 1
+    local generation = greatVaultTimerGeneration
+    greatVaultNoticeExpired = false
+    if not greatVaultLoginTime or DB.greatVaultDuration == 0 then
+        return
+    end
+    local remaining = DB.greatVaultDuration - (GetTime() - greatVaultLoginTime)
+    if remaining <= 0 then
+        greatVaultNoticeExpired = true
+        greatVaultLoginText:Hide()
+        return
+    end
+    C_Timer.After(remaining, function()
+        if generation == greatVaultTimerGeneration then
+            greatVaultNoticeExpired = true
+            greatVaultLoginText:Hide()
+        end
+    end)
+end
 local function InitializeGreatVaultLoginNotice()
     if greatVaultInitialized then
         return
     end
     greatVaultInitialized = true
+    greatVaultLoginTime = GetTime()
+    ConfigureGreatVaultTimer()
 
     local state = RefreshGreatVaultWeeklyState()
     if state.checked == true then
         ApplyCachedGreatVaultState()
-    else
+    end
+    if state.claimed ~= true then
         greatVaultLoginNoticePending = true
         ScheduleGreatVaultChecks()
     end
@@ -818,7 +810,7 @@ local function InitializeGreatVaultLoginNotice()
 end
 
 local function UpdateGreatVaultLoginNotice()
-    if InCombatLockdown() then
+    if InCombatLockdown() and DB.greatVaultDuration ~= 0 then
         greatVaultLoginText:Hide()
         return
     end
@@ -826,17 +818,36 @@ local function UpdateGreatVaultLoginNotice()
     local state = RefreshGreatVaultWeeklyState()
     if state.checked == true then
         ApplyCachedGreatVaultState()
-    elseif greatVaultLoginNoticePending then
+    end
+    if state.claimed ~= true then
         CheckGreatVaultRewards(true)
     end
 end
 
+SLASH_SIMPLECLASSVAULT1 = "/scrvault"
+SlashCmdList.SIMPLECLASSVAULT = function(message)
+    local input = message:match("^%s*(.-)%s*$")
+    local seconds = input:match("^%d+$") and tonumber(input) or nil
+    if not seconds or seconds > 86400 then
+        print(string.format(L.VAULT_COMMAND_USAGE, DB.greatVaultDuration))
+        return
+    end
+    DB.greatVaultDuration = seconds
+    ConfigureGreatVaultTimer()
+    UpdateGreatVaultLoginNotice()
+    if seconds == 0 then
+        print(L.VAULT_COMMAND_SANCTUARY)
+    else
+        print(string.format(L.VAULT_COMMAND_DURATION, seconds))
+    end
+end
 -- Ocultar el aviso en el mismo momento en que se reclama una recompensa.
 if C_WeeklyRewards and C_WeeklyRewards.ClaimReward then
     hooksecurefunc(C_WeeklyRewards, "ClaimReward", function()
         local state = RefreshGreatVaultWeeklyState()
         state.checked = true
         state.hasRewards = false
+        state.claimed = true
         greatVaultLoginText:Hide()
         greatVaultLoginNoticeShown = false
         greatVaultLoginNoticePending = false
@@ -1050,6 +1061,7 @@ local function BuildLFGJoinAnnouncement(searchResultID, fallbackGroupName)
     local data = {
         listingName = SafeLFGField(info, "name", "string")
             or SafeLFGValue(fallbackGroupName, "string"),
+        listingDescription = SafeLFGField(info, "comment", "string"),
     }
     local activityIDs = SafeLFGField(info, "activityIDs", "table")
     data.activityID = activityIDs and SafeLFGField(activityIDs, 1, "number")
@@ -1079,18 +1091,14 @@ local function BuildLFGJoinAnnouncement(searchResultID, fallbackGroupName)
         data.isRaid = SafeLFGField(activityInfo, "isCurrentRaidActivity", "boolean") == true
     end
 
-    if data.isMythicPlus and type(C_LFGList.GetKeystoneForActivity) == "function" then
-        local ok, level = pcall(C_LFGList.GetKeystoneForActivity, data.activityID)
-        level = ok and SafeLFGValue(level, "number") or nil
-        if level and level > 0 then
-            data.keystoneLevel = math.floor(level)
-        end
-    end
-    if data.isMythicPlus and not data.keystoneLevel and data.listingName then
-        local parsedLevel = data.listingName:match("%+(%d+)%f[%D]")
-        parsedLevel = parsedLevel and tonumber(parsedLevel) or nil
-        if parsedLevel and parsedLevel > 0 then
-            data.keystoneLevel = math.floor(parsedLevel)
+    -- El nivel debe proceder del anuncio concreto, no de la piedra del jugador.
+    if data.isMythicPlus then
+        for _, text in ipairs({ data.listingName or "", data.listingDescription or "" }) do
+            local parsedLevel = tonumber(text:match("%+%s*(%d+)%f[%D]"))
+            if parsedLevel and parsedLevel > 0 then
+                data.keystoneLevel = math.floor(parsedLevel)
+                break
+            end
         end
     end
 
@@ -1124,19 +1132,35 @@ local function AnnounceLFGJoin(data)
         activityName = activityName:gsub("%s*%(" .. escapedDifficulty .. "%)%s*$", "")
     end
 
+    local message
     local keystoneLevel = SafeLFGValue(data.keystoneLevel, "number")
     if data.isMythicPlus and keystoneLevel and keystoneLevel > 0 then
-        print(string.format(L.GF_ACTIVITY_KEYSTONE
+        message = string.format(L.GF_ACTIVITY_KEYSTONE
             or "[SimpleClassReminders] Has entrado a un grupo para: %s +%d",
-            activityName, math.floor(keystoneLevel)))
+            activityName, math.floor(keystoneLevel))
     elseif data.isRaid and difficultyName then
-        print(string.format(L.GF_ACTIVITY_DIFFICULTY
+        message = string.format(L.GF_ACTIVITY_DIFFICULTY
             or "[SimpleClassReminders] Has entrado a un grupo para: %s | %s",
-            activityName, difficultyName))
+            activityName, difficultyName)
     else
-        print(string.format(L.GF_ACTIVITY_ONLY
-            or "[SimpleClassReminders] Has entrado a un grupo para: %s", activityName))
+        message = string.format(L.GF_ACTIVITY_ONLY
+            or "[SimpleClassReminders] Has entrado a un grupo para: %s", activityName)
     end
+
+    if data.isMythicPlus then
+        local previousText
+        for _, key in ipairs({ "listingName", "listingDescription" }) do
+            local text = SafeLFGValue(data[key], "string")
+            if text then
+                text = text:gsub("%s+", " "):match("^%s*(.-)%s*$")
+                if text ~= "" and text ~= activityName and text ~= previousText then
+                    message = message .. " | " .. text
+                    previousText = text
+                end
+            end
+        end
+    end
+    print(message)
     return true
 end
 -- ==================================================
@@ -1144,6 +1168,9 @@ end
 -- ==================================================
 local f = CreateFrame("Frame")
 f:RegisterEvent("PLAYER_ENTERING_WORLD")
+f:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+f:RegisterEvent("ZONE_CHANGED")
+f:RegisterEvent("ZONE_CHANGED_INDOORS")
 f:RegisterEvent("BAG_UPDATE_DELAYED")
 f:RegisterEvent("GROUP_ROSTER_UPDATE")
 f:RegisterEvent("UNIT_AURA")
@@ -1238,6 +1265,7 @@ f:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_ENTERING_WORLD" then
         local isInitialLogin, isReloadingUI = ...
         InitializeGreatVaultLoginNotice()
+        UpdateGreatVaultLoginNotice()
 
         if not isInitialLogin and not isReloadingUI then
             local inInstance, instanceType = IsInInstance()
@@ -1247,7 +1275,8 @@ f:SetScript("OnEvent", function(_, event, ...)
         end
     end
 
-    if event == "WEEKLY_REWARDS_UPDATE" then
+    if event == "WEEKLY_REWARDS_UPDATE" or event == "ZONE_CHANGED_NEW_AREA"
+        or event == "ZONE_CHANGED" or event == "ZONE_CHANGED_INDOORS" then
         UpdateGreatVaultLoginNotice()
     end
 
@@ -1258,7 +1287,7 @@ f:SetScript("OnEvent", function(_, event, ...)
 	end
 
 	if event == "PLAYER_REGEN_DISABLED" then
-	    greatVaultLoginText:Hide()
+	    UpdateGreatVaultLoginNotice()
 	    HideAllTexts()
 	    return
 	end

@@ -17,7 +17,7 @@ Examples:
 - **Healthstone Reminder**
   Shows a warning if you are a Warlock, or if there is a Warlock in your group or raid, and you do not have a Healthstone.
 - **Premade Group Finder join message**
-  Caches the official activity while you apply and, after the group join is confirmed, prints a single message. Mythic+ dungeons include the keystone level; raids include their difficulty.
+  Caches the official activity while you apply and, after the group join is confirmed, prints a single message. Mythic+ dungeons include the listing title and description, with the keystone level extracted from an explicit +N in either text; raids include their difficulty.
 
 ### Pets
 - **Pet Reminder**

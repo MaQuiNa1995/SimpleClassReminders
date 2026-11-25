@@ -1,4 +1,4 @@
-## Interface: 120100, 120007, 120005, 120000, 120001
+## Interface: 120105, 120100, 120007, 120005, 120000, 120001
 ## Title: SimpleClassReminders
 ## Notes: Simple class reminders to track buffs, pets etc
 ## Author: MaQuina1995
